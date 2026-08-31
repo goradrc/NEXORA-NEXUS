@@ -1,2 +1,4 @@
-// NEXORA NEXUS Business Domain Package Entrypoint
-export const NEXUS_VERSION = '1.0.0';
+export * from './company/company.dto';
+export * from './customers/customers.dto';
+export * from './suppliers/suppliers.dto';
+export * from './catalog/catalog.dto';
