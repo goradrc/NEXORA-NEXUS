@@ -12,31 +12,52 @@ export interface AuthTokens {
 }
 
 export class AuthService {
-  private static readonly SECRET = process.env.JWT_SECRET || 'nexora-core-secret-key-2025';
-
   /**
-   * Hashes a password securely using SHA-256 / Salt.
+   * Retrieves the JWT secret key. Throws an explicit error if missing in production.
    */
-  public static hashPassword(password: string): string {
-    const salt = crypto.randomBytes(16).toString('hex');
-    const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-    return `${salt}:${hash}`;
+  private static getSecret(): string {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) {
+      if (process.env.NODE_ENV === 'production') {
+        throw new Error('FATAL_SECURITY_ERROR: JWT_SECRET environment variable is missing in production!');
+      }
+      return 'nexora-core-dev-only-secret-key-change-in-prod-2025';
+    }
+    return secret;
   }
 
   /**
-   * Verifies a raw password against the stored hash.
+   * Hashes a password using PBKDF2-SHA512 with 210,000 iterations (OWASP standard).
+   */
+  public static hashPassword(password: string): string {
+    const salt = crypto.randomBytes(16).toString('hex');
+    const iterations = 210000;
+    const hash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
+    return `${iterations}:${salt}:${hash}`;
+  }
+
+  /**
+   * Verifies a raw password against the stored PBKDF2 hash using timing-safe comparison.
    */
   public static verifyPassword(password: string, storedHash: string): boolean {
-    const [salt, originalHash] = storedHash.split(':');
-    if (!salt || !originalHash) return false;
-    const hash = crypto.pbkdf2Sync(password, salt, 1000, 64, 'sha512').toString('hex');
-    return hash === originalHash;
+    const parts = storedHash.split(':');
+    if (parts.length !== 3) return false;
+    const [iterationsStr, salt, originalHash] = parts;
+    const iterations = parseInt(iterationsStr, 10);
+    if (isNaN(iterations) || !salt || !originalHash) return false;
+
+    const hash = crypto.pbkdf2Sync(password, salt, iterations, 64, 'sha512').toString('hex');
+    const bufA = Buffer.from(hash, 'hex');
+    const bufB = Buffer.from(originalHash, 'hex');
+    if (bufA.length !== bufB.length) return false;
+    return crypto.timingSafeEqual(bufA, bufB);
   }
 
   /**
    * Generates JWT Access and Refresh Tokens.
    */
   public static generateTokens(payload: UserPayload): AuthTokens {
+    const secret = this.getSecret();
     const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
 
     const now = Math.floor(Date.now() / 1000);
@@ -52,11 +73,11 @@ export class AuthService {
       exp: now + (86400 * 7) // 7 days
     })).toString('base64url');
 
-    const accessSignature = crypto.createHmac('sha256', this.SECRET)
+    const accessSignature = crypto.createHmac('sha256', secret)
       .update(`${header}.${accessBody}`)
       .digest('base64url');
 
-    const refreshSignature = crypto.createHmac('sha256', this.SECRET)
+    const refreshSignature = crypto.createHmac('sha256', secret)
       .update(`${header}.${refreshBody}`)
       .digest('base64url');
 
@@ -67,20 +88,24 @@ export class AuthService {
   }
 
   /**
-   * Decodes and verifies a JWT token.
+   * Decodes and verifies a JWT token using constant-time comparison (Timing Attack Proof).
    */
   public static verifyToken<T = UserPayload>(token: string): T {
+    const secret = this.getSecret();
     const parts = token.split('.');
     if (parts.length !== 3) {
       throw new Error('Invalid token structure');
     }
 
     const [header, payload, signature] = parts;
-    const expectedSignature = crypto.createHmac('sha256', this.SECRET)
+    const expectedSignature = crypto.createHmac('sha256', secret)
       .update(`${header}.${payload}`)
       .digest('base64url');
 
-    if (signature !== expectedSignature) {
+    const bufSig = Buffer.from(signature, 'utf-8');
+    const bufExp = Buffer.from(expectedSignature, 'utf-8');
+
+    if (bufSig.length !== bufExp.length || !crypto.timingSafeEqual(bufSig, bufExp)) {
       throw new Error('Invalid token signature');
     }
 
