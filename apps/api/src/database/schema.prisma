@@ -1,0 +1,507 @@
+// NEXORA & NEXORA NEXUS - Master Database Schema
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==========================================
+// 1. NEXORA CORE ENTITIES (Shared Layer)
+// ==========================================
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String
+  legalName   String?  @map("legal_name")
+  logoUrl     String?  @map("logo_url")
+  taxId       String?  @map("tax_id")
+  email       String?
+  phone       String?
+  address     String?
+  city        String?
+  country     String?  @default("FR")
+  currency    String   @default("EUR")
+  timezone    String   @default("UTC")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  members     OrganizationUser[]
+  roles       Role[]
+  auditLogs   AuditLog[]
+  syncQueue   SyncQueue[]
+
+  // Nexus Business Modules Isolation
+  customers        Customer[]
+  suppliers        Supplier[]
+  employees        Employee[]
+  categories       Category[]
+  productsServices ProductService[]
+  stockMovements   StockMovement[]
+  purchaseOrders   PurchaseOrder[]
+  quotes           Quote[]
+  invoices         Invoice[]
+  deliveryNotes    DeliveryNote[]
+  payments         Payment[]
+  expenses         Expense[]
+
+  @@map("organizations")
+}
+
+model User {
+  id           String   @id @default(uuid())
+  email        String   @unique
+  passwordHash String   @map("password_hash")
+  firstName    String   @map("first_name")
+  lastName     String   @map("last_name")
+  phone        String?
+  isActive     Boolean  @default(true) @map("is_active")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  memberships    OrganizationUser[]
+  auditLogs      AuditLog[]
+  stockMovements StockMovement[]
+  employees      Employee[]
+
+  @@map("users")
+}
+
+model OrganizationUser {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  userId         String       @map("user_id")
+  roleId         String       @map("role_id")
+  status         MemberStatus @default(ACTIVE)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role         Role         @relation(fields: [roleId], references: [id])
+
+  @@unique([organizationId, userId])
+  @@map("organization_users")
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  INVITED
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  organizationId String?  @map("organization_id") // Null for global system roles
+  name           String
+  description    String?
+
+  organization    Organization?    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members         OrganizationUser[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id          String  @id @default(uuid())
+  code        String  @unique // e.g., 'nexus:invoices:create'
+  description String?
+
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String @map("role_id")
+  permissionId String @map("permission_id")
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model AuditLog {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  userId         String?  @map("user_id")
+  action         String   // CREATE, UPDATE, DELETE, LOGIN
+  entityName     String   @map("entity_name")
+  entityId       String   @map("entity_id")
+  changes        Json?
+  ipAddress      String?  @map("ip_address")
+  timestamp      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("audit_logs")
+}
+
+model SyncQueue {
+  id              String     @id @default(uuid())
+  organizationId  String     @map("organization_id")
+  userId          String     @map("user_id")
+  deviceId        String     @map("device_id")
+  entityType      String     @map("entity_type")
+  entityId        String     @map("entity_id")
+  operation       SyncOp
+  payload         Json
+  clientTimestamp DateTime   @map("client_timestamp")
+  serverTimestamp DateTime   @default(now()) @map("server_timestamp")
+  status          SyncStatus @default(PENDING)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("sync_queue")
+}
+
+enum SyncOp {
+  INSERT
+  UPDATE
+  DELETE
+}
+
+enum SyncStatus {
+  PENDING
+  APPLIED
+  CONFLICT
+}
+
+// ==========================================
+// 2. NEXORA NEXUS ENTITIES (Business Modules)
+// ==========================================
+
+model Customer {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  code           String
+  name           String
+  companyName    String?  @map("company_name")
+  email          String?
+  phone          String?
+  address        String?
+  city           String?
+  taxNumber      String?  @map("tax_number")
+  balance        Float    @default(0.0)
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  quotes       Quote[]
+  invoices     Invoice[]
+  deliveryNotes DeliveryNote[]
+  payments     Payment[]
+
+  @@map("customers")
+}
+
+model Supplier {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  code           String
+  name           String
+  companyName    String?  @map("company_name")
+  email          String?
+  phone          String?
+  address        String?
+  taxNumber      String?  @map("tax_number")
+  balanceDue     Float    @default(0.0) @map("balance_due")
+  paymentTerms   String?  @map("payment_terms")
+  createdAt      DateTime @default(now()) @map("created_at")
+  updatedAt      DateTime @updatedAt @map("updated_at")
+
+  organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  productsServices ProductService[]
+  purchaseOrders   PurchaseOrder[]
+  expenses         Expense[]
+
+  @@map("suppliers")
+}
+
+model Employee {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  userId         String?  @map("user_id")
+  employeeNumber String   @map("employee_number")
+  firstName      String   @map("first_name")
+  lastName       String   @map("last_name")
+  position       String
+  email          String?
+  phone          String?
+  hireDate       DateTime? @map("hire_date")
+  status         String   @default("ACTIVE")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@map("employees")
+}
+
+model Category {
+  id             String       @id @default(uuid())
+  organizationId String       @map("organization_id")
+  name           String
+  type           CategoryType
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  products     ProductService[]
+  expenses     Expense[]
+
+  @@map("categories")
+}
+
+enum CategoryType {
+  PRODUCT
+  SERVICE
+  EXPENSE
+}
+
+model ProductService {
+  id                String      @id @default(uuid())
+  organizationId    String      @map("organization_id")
+  categoryId        String      @map("category_id")
+  defaultSupplierId String?     @map("default_supplier_id")
+  type              CatalogType
+  reference         String      // SKU
+  name              String
+  description       String?
+  salePrice         Float       @map("sale_price")
+  purchaseCost      Float       @default(0.0) @map("purchase_cost")
+  taxRate           Float       @default(0.0) @map("tax_rate")
+  currentStock      Float       @default(0.0) @map("current_stock")
+  minStockAlert     Float       @default(0.0) @map("min_stock_alert")
+  unit              String      @default("PCE")
+
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category        Category        @relation(fields: [categoryId], references: [id])
+  defaultSupplier Supplier?       @relation(fields: [defaultSupplierId], references: [id], onDelete: SetNull)
+  stockMovements  StockMovement[]
+  lineItems       LineItem[]
+
+  @@map("products_services")
+}
+
+enum CatalogType {
+  PRODUCT
+  SERVICE
+}
+
+model StockMovement {
+  id              String       @id @default(uuid())
+  organizationId  String       @map("organization_id")
+  productId       String       @map("product_id")
+  type            MovementType
+  quantity        Float
+  unitCost        Float        @map("unit_cost")
+  reason          String?
+  referenceDocType String?     @map("reference_doc_type")
+  referenceDocId   String?     @map("reference_doc_id")
+  createdBy       String?      @map("created_by")
+  createdAt       DateTime     @default(now()) @map("created_at")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product      ProductService @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user         User?          @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@map("stock_movements")
+}
+
+enum MovementType {
+  IN
+  OUT
+  ADJUSTMENT
+}
+
+model PurchaseOrder {
+  id             String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  supplierId     String   @map("supplier_id")
+  poNumber       String   @map("po_number")
+  status         POStatus @default(DRAFT)
+  totalUntaxed   Float    @map("total_untaxed")
+  totalTax       Float    @map("total_tax")
+  totalAmount    Float    @map("total_amount")
+  orderDate      DateTime @default(now()) @map("order_date")
+  expectedDate   DateTime? @map("expected_date")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplier     Supplier     @relation(fields: [supplierId], references: [id])
+  lineItems    LineItem[]
+
+  @@map("purchase_orders")
+}
+
+enum POStatus {
+  DRAFT
+  ORDERED
+  RECEIVED
+  CANCELLED
+}
+
+model Quote {
+  id             String      @id @default(uuid())
+  organizationId String      @map("organization_id")
+  customerId     String      @map("customer_id")
+  quoteNumber    String      @map("quote_number")
+  status         QuoteStatus @default(DRAFT)
+  totalUntaxed   Float       @map("total_untaxed")
+  totalTax       Float       @map("total_tax")
+  totalAmount    Float       @map("total_amount")
+  validUntil     DateTime    @map("valid_until")
+  createdAt      DateTime    @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  invoices     Invoice[]
+  lineItems    LineItem[]
+
+  @@map("quotes")
+}
+
+enum QuoteStatus {
+  DRAFT
+  SENT
+  ACCEPTED
+  REJECTED
+  CONVERTED
+}
+
+model Invoice {
+  id             String        @id @default(uuid())
+  organizationId String        @map("organization_id")
+  customerId     String        @map("customer_id")
+  quoteId        String?       @map("quote_id")
+  invoiceNumber  String        @map("invoice_number")
+  status         InvoiceStatus @default(DRAFT)
+  totalUntaxed   Float         @map("total_untaxed")
+  totalTax       Float         @map("total_tax")
+  totalAmount    Float         @map("total_amount")
+  amountPaid     Float         @default(0.0) @map("amount_paid")
+  amountDue      Float         @map("amount_due")
+  dueDate        DateTime      @map("due_date")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  organization  Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer      Customer       @relation(fields: [customerId], references: [id])
+  quote         Quote?         @relation(fields: [quoteId], references: [id], onDelete: SetNull)
+  deliveryNotes DeliveryNote[]
+  payments      Payment[]
+  lineItems     LineItem[]
+
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  UNPAID
+  PARTIAL
+  PAID
+  CANCELLED
+}
+
+model DeliveryNote {
+  id              String         @id @default(uuid())
+  organizationId  String         @map("organization_id")
+  customerId      String         @map("customer_id")
+  invoiceId       String?        @map("invoice_id")
+  deliveryNumber  String         @map("delivery_number")
+  status          DeliveryStatus @default(DRAFT)
+  shippingAddress String?        @map("shipping_address")
+  carrierName     String?        @map("carrier_name")
+  trackingNumber  String?        @map("tracking_number")
+  shippedAt       DateTime?      @map("shipped_at")
+  deliveredAt     DateTime?      @map("delivered_at")
+  notes           String?
+  createdAt       DateTime       @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  invoice      Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  lineItems    LineItem[]
+
+  @@map("delivery_notes")
+}
+
+enum DeliveryStatus {
+  DRAFT
+  SHIPPED
+  DELIVERED
+  CANCELLED
+}
+
+model LineItem {
+  id               String  @id @default(uuid())
+  productServiceId String  @map("product_service_id")
+  quoteId          String? @map("quote_id")
+  invoiceId        String? @map("invoice_id")
+  deliveryNoteId   String? @map("delivery_note_id")
+  purchaseOrderId  String? @map("purchase_order_id")
+  description      String
+  quantity         Float
+  unitPrice        Float   @map("unit_price")
+  taxRate          Float   @default(0.0) @map("tax_rate")
+  discountPercent  Float   @default(0.0) @map("discount_percent")
+  totalPrice       Float   @map("total_price")
+
+  productService ProductService @relation(fields: [productServiceId], references: [id])
+  quote          Quote?         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  invoice        Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  deliveryNote   DeliveryNote?  @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
+  purchaseOrder  PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  @@map("line_items")
+}
+
+model Payment {
+  id            String        @id @default(uuid())
+  organizationId String       @map("organization_id")
+  customerId    String        @map("customer_id")
+  invoiceId     String        @map("invoice_id")
+  paymentNumber String        @map("payment_number")
+  amount        Float
+  paymentMethod PaymentMethod @map("payment_method")
+  referenceCode String?       @map("reference_code")
+  paymentDate   DateTime      @default(now()) @map("payment_date")
+  createdAt     DateTime      @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id])
+  invoice      Invoice      @relation(fields: [invoiceId], references: [id])
+
+  @@map("payments")
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CHECK
+  MOBILE_MONEY
+  CARD
+}
+
+model Expense {
+  id             String        @id @default(uuid())
+  organizationId String        @map("organization_id")
+  categoryId     String        @map("category_id")
+  supplierId     String?       @map("supplier_id")
+  description    String
+  amount         Float
+  paymentMethod  PaymentMethod @map("payment_method")
+  receiptUrl     String?       @map("receipt_url")
+  expenseDate    DateTime      @default(now()) @map("expense_date")
+  createdAt      DateTime      @default(now()) @map("created_at")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  category     Category     @relation(fields: [categoryId], references: [id])
+  supplier     Supplier?    @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  @@map("expenses")
+}
