@@ -33,4 +33,5 @@ export interface UpdateCustomerDto {
   address?: string;
   city?: string;
   taxNumber?: string;
+  balance?: number;
 }

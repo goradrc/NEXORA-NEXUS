@@ -5,3 +5,6 @@ export * from './catalog/catalog.dto';
 export * from './stock/stock.dto';
 export * from './expenses/expenses.dto';
 export * from './employees/employees.dto';
+export * from './quotes/quotes.dto';
+export * from './invoices/invoices.dto';
+export * from './payments/payments.dto';

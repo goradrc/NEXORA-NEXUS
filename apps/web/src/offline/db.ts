@@ -62,6 +62,57 @@ export interface LocalEmployee {
   status: string;
 }
 
+export interface LocalLineItem {
+  id: string;
+  productServiceId: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  taxRate: number;
+  discountPercent: number;
+  totalPrice: number;
+}
+
+export interface LocalQuote {
+  id: string;
+  organizationId: string;
+  customerId: string;
+  quoteNumber: string;
+  status: string;
+  totalUntaxed: number;
+  totalTax: number;
+  totalAmount: number;
+  lineItems: LocalLineItem[];
+  createdAt: string;
+}
+
+export interface LocalInvoice {
+  id: string;
+  organizationId: string;
+  customerId: string;
+  quoteId?: string;
+  invoiceNumber: string;
+  status: string;
+  totalUntaxed: number;
+  totalTax: number;
+  totalAmount: number;
+  amountPaid: number;
+  amountDue: number;
+  lineItems: LocalLineItem[];
+  createdAt: string;
+}
+
+export interface LocalPayment {
+  id: string;
+  organizationId: string;
+  customerId: string;
+  invoiceId: string;
+  paymentNumber: string;
+  amount: number;
+  paymentMethod: string;
+  createdAt: string;
+}
+
 export class NexoraLocalDatabase {
   public syncQueue: LocalSyncQueueItem[] = [];
   public customers: LocalCustomer[] = [];
@@ -69,6 +120,9 @@ export class NexoraLocalDatabase {
   public stockMovements: LocalStockMovement[] = [];
   public expenses: LocalExpense[] = [];
   public employees: LocalEmployee[] = [];
+  public quotes: LocalQuote[] = [];
+  public invoices: LocalInvoice[] = [];
+  public payments: LocalPayment[] = [];
 
   public async saveSyncMutation(
     item: Omit<LocalSyncQueueItem, 'clientTimestamp' | 'status'>
@@ -103,6 +157,18 @@ export class NexoraLocalDatabase {
       this.expenses.push(payload as LocalExpense);
     } else if (entityType === 'Employee' && operation === 'INSERT') {
       this.employees.push(payload as LocalEmployee);
+    } else if (entityType === 'Quote' && operation === 'INSERT') {
+      this.quotes.push(payload as LocalQuote);
+    } else if (entityType === 'Invoice' && operation === 'INSERT') {
+      this.invoices.push(payload as LocalInvoice);
+    } else if (entityType === 'Payment' && operation === 'INSERT') {
+      this.payments.push(payload as LocalPayment);
+      const invoice = this.invoices.find(i => i.id === payload.invoiceId);
+      if (invoice) {
+        invoice.amountPaid += payload.amount;
+        invoice.amountDue = Math.max(0, invoice.totalAmount - invoice.amountPaid);
+        invoice.status = invoice.amountDue === 0 ? 'PAID' : 'PARTIAL';
+      }
     }
   }
 
@@ -127,6 +193,9 @@ export class NexoraLocalDatabase {
     this.stockMovements = [];
     this.expenses = [];
     this.employees = [];
+    this.quotes = [];
+    this.invoices = [];
+    this.payments = [];
   }
 }
 
