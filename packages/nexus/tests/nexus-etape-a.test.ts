@@ -59,4 +59,33 @@ describe('NEXORA NEXUS — Étape A Test Suite (Fondations UI & System Layout)',
       expect(usePermissions('nexus:any:permission')).toBe(true);
     });
   });
+
+  describe('3. Étape B1 — CORE Module Selection & Switcher', () => {
+    it('should handle activeModule and defaultModule properties in UserSession context', () => {
+      const mockAuthModule = require('../../../apps/web/src/context/AuthContext');
+
+      const mockSelectModule = jest.fn();
+      jest.spyOn(mockAuthModule, 'useAuth').mockReturnValue({
+        user: {
+          userId: 'usr-123',
+          email: 'user@nexora.io',
+          organizationId: 'org-1',
+          permissions: ['nexus:catalog:read'],
+          defaultModule: 'NEXUS',
+          activeModule: 'NEXUS',
+        },
+        activeModule: 'NEXUS',
+        selectModule: mockSelectModule,
+      });
+
+      const { useAuth } = mockAuthModule;
+      const auth = useAuth();
+
+      expect(auth.activeModule).toEqual('NEXUS');
+      expect(auth.user.defaultModule).toEqual('NEXUS');
+
+      auth.selectModule('VITALIS', true);
+      expect(mockSelectModule).toHaveBeenCalledWith('VITALIS', true);
+    });
+  });
 });

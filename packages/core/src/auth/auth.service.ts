@@ -4,6 +4,7 @@ export interface UserPayload {
   userId: string;
   email: string;
   organizationId?: string;
+  defaultModule?: 'NEXUS' | 'VITALIS';
 }
 
 export interface AuthTokens {
@@ -85,6 +86,16 @@ export class AuthService {
       accessToken: `${header}.${accessBody}.${accessSignature}`,
       refreshToken: `${header}.${refreshBody}.${refreshSignature}`
     };
+  }
+
+  /**
+   * Validates default module parameter strictly against allowed NEXORA modules.
+   */
+  public static validateDefaultModule(moduleName: string): 'NEXUS' | 'VITALIS' {
+    if (moduleName !== 'NEXUS' && moduleName !== 'VITALIS') {
+      throw new Error("INVALID_MODULE: defaultModule must be either 'NEXUS' or 'VITALIS'");
+    }
+    return moduleName;
   }
 
   /**
