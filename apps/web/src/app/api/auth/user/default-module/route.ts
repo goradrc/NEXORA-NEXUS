@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AuthService } from '@nexora/core';
+import { PrismaClient } from '@prisma/client';
 
 export async function POST(req: NextRequest) {
   try {
@@ -34,23 +35,37 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Update Prisma User record if DATABASE_URL is configured
-    if (process.env.DATABASE_URL) {
-      try {
-        const { PrismaClient } = await import('@prisma/client');
-        const prisma = new PrismaClient();
-        await prisma.user.update({
-          where: { id: payload.userId },
-          data: { defaultModule: defaultModule }
-        });
-      } catch (dbErr: any) {
-        console.warn('Database update skipped or failed:', dbErr.message);
-      }
+    // Require DATABASE_URL environment variable; fail with 503 if missing
+    if (!process.env.DATABASE_URL) {
+      return NextResponse.json(
+        {
+          error: 'SERVICE_UNAVAILABLE',
+          message: 'Database configuration missing (DATABASE_URL is not set)',
+        },
+        { status: 503 }
+      );
+    }
+
+    // Perform database update via Prisma ORM; fail with 500 if DB operation fails
+    try {
+      const prisma = new PrismaClient();
+      await prisma.user.update({
+        where: { id: payload.userId },
+        data: { defaultModule: defaultModule as 'NEXUS' | 'VITALIS' },
+      });
+    } catch (dbErr: any) {
+      return NextResponse.json(
+        {
+          error: 'DATABASE_ERROR',
+          message: dbErr.message || 'Failed to update user default module in database',
+        },
+        { status: 500 }
+      );
     }
 
     const updatedPayload = {
       ...payload,
-      defaultModule: defaultModule as 'NEXUS' | 'VITALIS'
+      defaultModule: defaultModule as 'NEXUS' | 'VITALIS',
     };
 
     const tokens = AuthService.generateTokens(updatedPayload);
@@ -58,7 +73,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       defaultModule,
-      tokens
+      tokens,
     });
   } catch (error: any) {
     return NextResponse.json(

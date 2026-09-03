@@ -9,12 +9,19 @@ export default function SelectModulePage() {
   const router = useRouter();
   const [saveAsDefault, setSaveAsDefault] = useState(true);
 
-  const handleChooseModule = (module: ModuleType) => {
-    selectModule(module, saveAsDefault);
-    if (module === 'NEXUS') {
-      router.push('/');
-    } else if (module === 'VITALIS') {
-      router.push('/vitalis');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const handleChooseModule = async (module: ModuleType) => {
+    setErrorMessage(null);
+    try {
+      await selectModule(module, saveAsDefault);
+      if (module === 'NEXUS') {
+        router.push('/');
+      } else if (module === 'VITALIS') {
+        router.push('/vitalis');
+      }
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Erreur lors de la sauvegarde de votre choix.');
     }
   };
 
@@ -41,6 +48,21 @@ export default function SelectModulePage() {
         {user && (
           <div style={{ marginTop: 12, fontSize: 13, color: '#64748b' }}>
             Connecté en tant que : <strong style={{ color: '#cbd5e1' }}>{user.email}</strong>
+          </div>
+        )}
+        {errorMessage && (
+          <div
+            style={{
+              marginTop: 16,
+              padding: '10px 16px',
+              backgroundColor: '#451a03',
+              border: '1px solid #b45309',
+              borderRadius: 8,
+              color: '#fde68a',
+              fontSize: 13,
+            }}
+          >
+            ⚠️ {errorMessage}
           </div>
         )}
       </div>

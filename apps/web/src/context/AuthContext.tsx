@@ -150,32 +150,29 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
 
     if (saveAsDefault) {
-      try {
-        const res = await ApiClient.request('/auth/user/default-module', {
-          method: 'POST',
-          body: { defaultModule: module },
-        });
+      const res = await ApiClient.request('/auth/user/default-module', {
+        method: 'POST',
+        body: { defaultModule: module },
+      });
 
-        if (res.status >= 400 || (res.data && res.data.error)) {
-          throw new Error(res.data?.message || 'Failed to persist default module on server');
-        }
+      if (res.status >= 400 || (res.data && res.data.error) || res.error) {
+        const errorMessage = res.error || res.data?.message || 'Failed to persist default module on server';
+        console.error('Failed to persist default module on server:', errorMessage);
+        throw new Error(errorMessage);
+      }
 
-        if (res.data && res.data.tokens?.accessToken) {
-          const newToken = res.data.tokens.accessToken;
-          setToken(newToken);
-          ApiClient.setAuthToken(newToken);
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('nexora_token', newToken);
-          }
-        }
-
+      if (res.data && res.data.tokens?.accessToken) {
+        const newToken = res.data.tokens.accessToken;
+        setToken(newToken);
+        ApiClient.setAuthToken(newToken);
         if (typeof window !== 'undefined') {
-          localStorage.setItem(`nexora_default_module_${user.userId}`, module);
-          localStorage.setItem('nexora_default_module', module);
+          localStorage.setItem('nexora_token', newToken);
         }
-      } catch (err: any) {
-        console.error('Failed to persist default module on server:', err);
-        throw err;
+      }
+
+      if (typeof window !== 'undefined') {
+        localStorage.setItem(`nexora_default_module_${user.userId}`, module);
+        localStorage.setItem('nexora_default_module', module);
       }
     }
 

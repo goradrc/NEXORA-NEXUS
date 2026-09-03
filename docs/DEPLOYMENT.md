@@ -73,7 +73,20 @@ pnpm prisma generate --schema=apps/api/src/database/schema.prisma
 
 ---
 
-## 3. Déploiement de l'API & Frontend
+## 3. Architecture API & Emplacement de la Route `/auth/user/default-module`
+
+Le monorepo NEXORA comprend deux couches d'API :
+
+1. **`apps/api` (Serveur Backend NestJS Centré)** :
+   Contient la logique métier centrale, les contrôleurs NestJS, et les services d'arrière-plan.
+2. **`apps/web` (Frontend Next.js App Router API Routes)** :
+   Utilise l'API Route Handler (`/api/auth/user/default-module/route.ts`) pour gérer de manière synchrone les requêtes de session utilisateur, les tokens JWT et l'accès direct aux données utilisateur via Prisma.
+
+La route `POST /api/auth/user/default-module` est hébergée sur `apps/web/src/app/api/auth/user/default-module/route.ts` afin d'assurer l'autonomie du serveur web Next.js lors du basculement de module, tout en interagissant directement avec la base de données PostgreSQL via Prisma Client. Lors du déploiement de l'API NestJS (`apps/api`), le contrôleur `AuthController` de NestJS pourra directement servir un miroir de cette même route (`/api/v1/auth/user/default-module`) pour la consommation par d'autres clients (ex: applications mobiles ou extensions).
+
+---
+
+## 4. Déploiement de l'API & Frontend
 
 ### 1. Variables d'Environnement Obligatoires
 
