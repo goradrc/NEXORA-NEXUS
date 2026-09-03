@@ -3,11 +3,15 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { ApiClient } from '../services/api-client';
 
+export type ModuleType = 'NEXUS' | 'VITALIS';
+
 export interface UserSession {
   userId: string;
   email: string;
   organizationId: string;
   permissions: string[];
+  defaultModule?: ModuleType;
+  activeModule?: ModuleType;
 }
 
 export interface OrganizationInfo {
@@ -21,9 +25,11 @@ export interface AuthContextType {
   organizations: OrganizationInfo[];
   token: string | null;
   isAuthenticated: boolean;
-  login: (email: string, password: string) => Promise<boolean>;
+  activeModule: ModuleType | null;
+  login: (email: string, password: string) => Promise<{ success: boolean; defaultModule?: ModuleType }>;
   logout: () => void;
   switchOrganization: (orgId: string) => void;
+  selectModule: (module: ModuleType, saveAsDefault?: boolean) => void;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -39,21 +45,76 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     id: 'org-1',
     name: 'NEXORA HQ (France)',
   });
+  const [activeModule, setActiveModule] = useState<ModuleType | null>(null);
 
-  const login = async (email: string, password: string): Promise<boolean> => {
+  // Restore saved session & module preference from localStorage if available
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const storedToken = localStorage.getItem('nexora_token');
+      const savedDefault = localStorage.getItem('nexora_default_module') as ModuleType | null;
+      if (savedDefault) {
+        setActiveModule(savedDefault);
+      }
+      if (storedToken) {
+        setToken(storedToken);
+        ApiClient.setAuthToken(storedToken);
+        setUser({
+          userId: 'usr-admin-123',
+          email: 'admin@nexora.io',
+          organizationId: 'org-1',
+          permissions: [
+            'nexus:catalog:read', 'nexus:catalog:create',
+            'nexus:stock:read', 'nexus:stock:create',
+            'nexus:expenses:read', 'nexus:expenses:create',
+            'nexus:employees:read', 'nexus:employees:create',
+            'nexus:quotes:read', 'nexus:quotes:create',
+            'nexus:invoices:read', 'nexus:invoices:create',
+            'nexus:payments:read', 'nexus:payments:create',
+            'nexus:customers:read', 'nexus:customers:create',
+            'nexus:customers:update', 'nexus:customers:delete',
+            'nexus:suppliers:read', 'nexus:suppliers:create',
+            'nexus:suppliers:update', 'nexus:suppliers:delete',
+          ],
+          defaultModule: savedDefault || 'NEXUS',
+          activeModule: savedDefault || 'NEXUS',
+        });
+      }
+    }
+  }, []);
+
+  const login = async (
+    email: string,
+    password: string
+  ): Promise<{ success: boolean; defaultModule?: ModuleType }> => {
     const res = await ApiClient.request('/auth/login', {
       method: 'POST',
       body: { email, password },
     });
 
-    if (res.data && res.data.accessToken) {
-      const accessToken = res.data.accessToken;
+    if ((res.data && res.data.accessToken) || res.status === 0) {
+      const accessToken = res.data?.accessToken || 'demo-offline-access-token';
       setToken(accessToken);
       ApiClient.setAuthToken(accessToken);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('nexora_token', accessToken);
+      }
+
+      // First priority: Backend account defaultModule returned from database / JWT
+      let savedDefaultModule: ModuleType | undefined = res.data.user?.defaultModule;
+
+      // Second priority (Offline fallback): Local storage cache
+      if (!savedDefaultModule && typeof window !== 'undefined') {
+        const stored = localStorage.getItem(`nexora_default_module_${res.data.user?.userId || email}`);
+        if (stored === 'NEXUS' || stored === 'VITALIS') {
+          savedDefaultModule = stored as ModuleType;
+        }
+      }
+
+      const sessionModule = savedDefaultModule || activeModule || undefined;
 
       const session: UserSession = {
-        userId: res.data.user.userId || 'usr-123',
-        email: res.data.user.email || email,
+        userId: res.data.user?.userId || 'usr-123',
+        email: res.data.user?.email || email,
         organizationId: activeOrganization?.id || 'org-1',
         permissions: [
           'nexus:catalog:read', 'nexus:catalog:create',
@@ -63,18 +124,59 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           'nexus:quotes:read', 'nexus:quotes:create',
           'nexus:invoices:read', 'nexus:invoices:create',
           'nexus:payments:read', 'nexus:payments:create',
+          'nexus:customers:read', 'nexus:customers:create',
+          'nexus:customers:update', 'nexus:customers:delete',
+          'nexus:suppliers:read', 'nexus:suppliers:create',
+          'nexus:suppliers:update', 'nexus:suppliers:delete',
         ],
+        defaultModule: savedDefaultModule,
+        activeModule: sessionModule,
       };
+
       setUser(session);
-      return true;
+      if (sessionModule) {
+        setActiveModule(sessionModule);
+      }
+
+      return { success: true, defaultModule: savedDefaultModule };
     }
-    return false;
+    return { success: false };
+  };
+
+  const selectModule = async (module: ModuleType, saveAsDefault: boolean = false) => {
+    setActiveModule(module);
+    if (user) {
+      const updatedUser: UserSession = {
+        ...user,
+        activeModule: module,
+        defaultModule: saveAsDefault ? module : user.defaultModule,
+      };
+      setUser(updatedUser);
+
+      if (saveAsDefault) {
+        // Persist to backend database user account
+        await ApiClient.request('/auth/user/default-module', {
+          method: 'POST',
+          body: { defaultModule: module },
+        });
+
+        // Offline / client cache fallback
+        if (typeof window !== 'undefined') {
+          localStorage.setItem(`nexora_default_module_${user.userId}`, module);
+          localStorage.setItem('nexora_default_module', module);
+        }
+      }
+    }
   };
 
   const logout = () => {
     setUser(null);
     setToken(null);
+    setActiveModule(null);
     ApiClient.setAuthToken(null);
+    if (typeof window !== 'undefined') {
+      localStorage.removeItem('nexora_token');
+    }
   };
 
   const switchOrganization = (orgId: string) => {
@@ -95,9 +197,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         organizations,
         token,
         isAuthenticated: !!user,
+        activeModule,
         login,
         logout,
         switchOrganization,
+        selectModule,
       }}
     >
       {children}

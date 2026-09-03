@@ -4,6 +4,7 @@ export interface UserPayload {
   userId: string;
   email: string;
   organizationId?: string;
+  defaultModule?: 'NEXUS' | 'VITALIS';
 }
 
 export interface AuthTokens {

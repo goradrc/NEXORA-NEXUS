@@ -18,9 +18,15 @@ export default function LoginPage() {
     setLoading(true);
 
     try {
-      const success = await login(email, password);
-      if (success) {
-        router.push('/');
+      const result = await login(email, password);
+      if (result.success) {
+        if (result.defaultModule === 'NEXUS') {
+          router.push('/');
+        } else if (result.defaultModule === 'VITALIS') {
+          router.push('/vitalis');
+        } else {
+          router.push('/select-module');
+        }
       } else {
         setError('Identifiants incorrects ou connexion refusée');
       }
