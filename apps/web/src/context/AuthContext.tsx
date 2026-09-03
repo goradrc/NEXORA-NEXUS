@@ -144,29 +144,47 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const selectModule = async (module: ModuleType, saveAsDefault: boolean = false) => {
-    setActiveModule(module);
-    if (user) {
-      const updatedUser: UserSession = {
-        ...user,
-        activeModule: module,
-        defaultModule: saveAsDefault ? module : user.defaultModule,
-      };
-      setUser(updatedUser);
+    if (!user) {
+      setActiveModule(module);
+      return;
+    }
 
-      if (saveAsDefault) {
-        // Persist to backend database user account
-        await ApiClient.request('/auth/user/default-module', {
+    if (saveAsDefault) {
+      try {
+        const res = await ApiClient.request('/auth/user/default-module', {
           method: 'POST',
           body: { defaultModule: module },
         });
 
-        // Offline / client cache fallback
+        if (res.status >= 400 || (res.data && res.data.error)) {
+          throw new Error(res.data?.message || 'Failed to persist default module on server');
+        }
+
+        if (res.data && res.data.tokens?.accessToken) {
+          const newToken = res.data.tokens.accessToken;
+          setToken(newToken);
+          ApiClient.setAuthToken(newToken);
+          if (typeof window !== 'undefined') {
+            localStorage.setItem('nexora_token', newToken);
+          }
+        }
+
         if (typeof window !== 'undefined') {
           localStorage.setItem(`nexora_default_module_${user.userId}`, module);
           localStorage.setItem('nexora_default_module', module);
         }
+      } catch (err: any) {
+        console.error('Failed to persist default module on server:', err);
+        throw err;
       }
     }
+
+    setActiveModule(module);
+    setUser({
+      ...user,
+      activeModule: module,
+      defaultModule: saveAsDefault ? module : user.defaultModule,
+    });
   };
 
   const logout = () => {

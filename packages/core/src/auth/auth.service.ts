@@ -89,6 +89,16 @@ export class AuthService {
   }
 
   /**
+   * Validates default module parameter strictly against allowed NEXORA modules.
+   */
+  public static validateDefaultModule(moduleName: string): 'NEXUS' | 'VITALIS' {
+    if (moduleName !== 'NEXUS' && moduleName !== 'VITALIS') {
+      throw new Error("INVALID_MODULE: defaultModule must be either 'NEXUS' or 'VITALIS'");
+    }
+    return moduleName;
+  }
+
+  /**
    * Decodes and verifies a JWT token using constant-time comparison (Timing Attack Proof).
    */
   public static verifyToken<T = UserPayload>(token: string): T {

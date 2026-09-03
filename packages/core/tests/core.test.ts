@@ -36,6 +36,23 @@ describe('NEXORA CORE Engine Test Suite', () => {
 
       expect(() => AuthService.verifyToken(tamperedToken)).toThrow('Invalid token signature');
     });
+
+    it('should validate defaultModule enum strictly', () => {
+      expect(AuthService.validateDefaultModule('NEXUS')).toEqual('NEXUS');
+      expect(AuthService.validateDefaultModule('VITALIS')).toEqual('VITALIS');
+      expect(() => AuthService.validateDefaultModule('INVALID_MODULE')).toThrow('INVALID_MODULE');
+    });
+
+    it('should include defaultModule in generated JWT payload and decode it correctly', () => {
+      const payload = {
+        userId: 'usr-123-uuid',
+        email: 'admin@nexora.io',
+        defaultModule: 'NEXUS' as const
+      };
+      const tokens = AuthService.generateTokens(payload);
+      const decoded = AuthService.verifyToken(tokens.accessToken);
+      expect(decoded.defaultModule).toEqual('NEXUS');
+    });
   });
 
   describe('2. Strict Multi-Tenant Isolation Module', () => {
