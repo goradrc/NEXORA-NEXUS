@@ -29,7 +29,21 @@ export interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<UserSession | null>(null);
+  const [user, setUser] = useState<UserSession | null>({
+    userId: 'usr-admin-123',
+    email: 'admin@nexora.io',
+    organizationId: 'org-1',
+    permissions: [
+      'nexus:customers:read', 'nexus:customers:create', 'nexus:customers:update', 'nexus:customers:delete',
+      'nexus:catalog:read', 'nexus:catalog:create', 'nexus:catalog:update', 'nexus:catalog:delete',
+      'nexus:stock:read', 'nexus:stock:create',
+      'nexus:expenses:read', 'nexus:expenses:create',
+      'nexus:employees:read', 'nexus:employees:create',
+      'nexus:quotes:read', 'nexus:quotes:create',
+      'nexus:invoices:read', 'nexus:invoices:create',
+      'nexus:payments:read', 'nexus:payments:create',
+    ],
+  });
   const [token, setToken] = useState<string | null>(null);
   const [organizations, setOrganizations] = useState<OrganizationInfo[]>([
     { id: 'org-1', name: 'NEXORA HQ (France)' },
@@ -56,7 +70,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         email: res.data.user.email || email,
         organizationId: activeOrganization?.id || 'org-1',
         permissions: [
-          'nexus:catalog:read', 'nexus:catalog:create',
+          'nexus:customers:read', 'nexus:customers:create', 'nexus:customers:update', 'nexus:customers:delete',
+          'nexus:catalog:read', 'nexus:catalog:create', 'nexus:catalog:update', 'nexus:catalog:delete',
           'nexus:stock:read', 'nexus:stock:create',
           'nexus:expenses:read', 'nexus:expenses:create',
           'nexus:employees:read', 'nexus:employees:create',
