@@ -203,19 +203,20 @@ model Customer {
 }
 
 model Supplier {
-  id             String   @id @default(uuid())
-  organizationId String   @map("organization_id")
+  id             String         @id @default(uuid())
+  organizationId String         @map("organization_id")
   code           String
   name           String
-  companyName    String?  @map("company_name")
+  companyName    String?        @map("company_name")
   email          String?
   phone          String?
   address        String?
-  taxNumber      String?  @map("tax_number")
-  balanceDue     Float    @default(0.0) @map("balance_due")
-  paymentTerms   String?  @map("payment_terms")
-  createdAt      DateTime @default(now()) @map("created_at")
-  updatedAt      DateTime @updatedAt @map("updated_at")
+  taxNumber      String?        @map("tax_number")
+  balanceDue     Float          @default(0.0) @map("balance_due")
+  paymentTerms   String?        @map("payment_terms")
+  status         SupplierStatus @default(ACTIVE)
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
 
   organization     Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   productsServices ProductService[]
@@ -223,6 +224,11 @@ model Supplier {
   expenses         Expense[]
 
   @@map("suppliers")
+}
+
+enum SupplierStatus {
+  ACTIVE
+  INACTIVE
 }
 
 model Employee {

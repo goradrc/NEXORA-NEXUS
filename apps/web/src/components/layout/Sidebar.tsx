@@ -32,6 +32,7 @@ const navGroups: SidebarNavGroup[] = [
   {
     title: 'Catalogue & Opérations',
     items: [
+      { label: 'Fournisseurs', href: '/suppliers', icon: '🏭', permission: 'nexus:suppliers:read' },
       { label: 'Produits & Services', href: '/catalog', icon: '📦', permission: 'nexus:catalog:read' },
       { label: 'Mouvements Stock', href: '/stock', icon: '🔄', permission: 'nexus:stock:read' },
       { label: 'Dépenses', href: '/expenses', icon: '💸', permission: 'nexus:expenses:read' },
