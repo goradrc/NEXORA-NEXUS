@@ -42,6 +42,7 @@ export class CreateQuoteDto {
   customerId: string;
   quoteNumber?: string;
   validUntil?: string;
+  mutationId?: string;
   lineItems: CreateLineItemDto[];
 }
 
@@ -74,6 +75,7 @@ export class CreateInvoiceDto {
   invoiceNumber?: string;
   quoteId?: string;
   dueDate?: string;
+  mutationId?: string;
   lineItems: CreateLineItemDto[];
 }
 
@@ -103,4 +105,5 @@ export class RecordPaymentDto {
   paymentMethod: PaymentMethod;
   referenceCode?: string;
   paymentDate?: string;
+  mutationId?: string;
 }

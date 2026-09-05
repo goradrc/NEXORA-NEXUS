@@ -21,6 +21,23 @@ export class SalesService {
   private static invoicesStore: InvoiceDto[] = [];
   private static paymentsStore: PaymentDto[] = [];
 
+  // Idempotency stores: map mutationId -> created entity ID
+  private static processedMutations: Map<string, any> = new Map();
+
+  // Locks per document / organization for concurrency management
+  private static locks: Set<string> = new Set();
+
+  private static acquireLock(key: string): void {
+    if (this.locks.has(key)) {
+      throw new Error(`CONCURRENCY_LOCK: Operation on ${key} is currently locked by another concurrent transaction.`);
+    }
+    this.locks.add(key);
+  }
+
+  private static releaseLock(key: string): void {
+    this.locks.delete(key);
+  }
+
   // Helper: Get next sequential document number (e.g., FAC-2025-0001)
   private static getNextDocumentNumber(
     organizationId: string,
@@ -34,31 +51,32 @@ export class SalesService {
     return `${prefix}-${year}-${next.toString().padStart(4, '0')}`;
   }
 
-  // Helper: Calculate line item net HT price
+  // Helper: Calculate line item net HT price with exact 2-decimal financial rounding
   public static calculateLineTotal(item: CreateLineItemDto): number {
     const qty = Math.max(0, item.quantity || 0);
     const price = Math.max(0, item.unitPrice || 0);
     const discount = Math.min(100, Math.max(0, item.discountPercent || 0));
-    return Number((qty * price * (1 - discount / 100)).toFixed(2));
+    // Exact rounding: round to nearest cent
+    return Math.round(qty * price * (1 - discount / 100) * 100) / 100;
   }
 
-  // Helper: Process line items and compute totals
+  // Helper: Process line items and compute totals with exact cent precision
   public static processLineItems(items: CreateLineItemDto[]): {
     processedLines: LineItemDto[];
     totalUntaxed: number;
     totalTax: number;
     totalAmount: number;
   } {
-    let totalUntaxed = 0;
-    let totalTax = 0;
+    let totalUntaxedCents = 0;
+    let totalTaxCents = 0;
 
     const processedLines: LineItemDto[] = items.map((line, idx) => {
       const lineHT = this.calculateLineTotal(line);
       const taxRate = Math.max(0, line.taxRate || 0);
-      const lineTax = Number((lineHT * (taxRate / 100)).toFixed(2));
+      const lineTax = Math.round(lineHT * (taxRate / 100) * 100) / 100;
 
-      totalUntaxed += lineHT;
-      totalTax += lineTax;
+      totalUntaxedCents += Math.round(lineHT * 100);
+      totalTaxCents += Math.round(lineTax * 100);
 
       return {
         id: `line-${Date.now()}-${idx}-${crypto.randomUUID().slice(0, 4)}`,
@@ -72,9 +90,9 @@ export class SalesService {
       };
     });
 
-    totalUntaxed = Number(totalUntaxed.toFixed(2));
-    totalTax = Number(totalTax.toFixed(2));
-    const totalAmount = Number((totalUntaxed + totalTax).toFixed(2));
+    const totalUntaxed = totalUntaxedCents / 100;
+    const totalTax = totalTaxCents / 100;
+    const totalAmount = (totalUntaxedCents + totalTaxCents) / 100;
 
     return { processedLines, totalUntaxed, totalTax, totalAmount };
   }
@@ -111,6 +129,10 @@ export class SalesService {
     RolesGuard.enforcePermission(userPermissions, 'nexus:quotes:create');
     const orgId = tenantContext.organizationId;
 
+    if (dto.mutationId && this.processedMutations.has(dto.mutationId)) {
+      return this.processedMutations.get(dto.mutationId);
+    }
+
     const { processedLines, totalUntaxed, totalTax, totalAmount } = this.processLineItems(
       dto.lineItems || []
     );
@@ -135,6 +157,9 @@ export class SalesService {
     };
 
     this.quotesStore.push(newQuote);
+    if (dto.mutationId) {
+      this.processedMutations.set(dto.mutationId, newQuote);
+    }
     return newQuote;
   }
 
@@ -187,35 +212,52 @@ export class SalesService {
   public static convertQuoteToInvoice(
     tenantContext: TenantContext,
     quoteId: string,
-    userPermissions: string[]
+    userPermissions: string[],
+    mutationId?: string
   ): InvoiceDto {
     RolesGuard.enforcePermission(userPermissions, 'nexus:quotes:update');
     RolesGuard.enforcePermission(userPermissions, 'nexus:invoices:create');
 
-    const quote = this.findOneQuote(tenantContext, quoteId, userPermissions);
-
-    if (quote.status === 'CONVERTED') {
-      throw new Error(`QUOTE_ALREADY_CONVERTED: Quote ${quoteId} is already converted`);
+    if (mutationId && this.processedMutations.has(mutationId)) {
+      return this.processedMutations.get(mutationId);
     }
 
-    // Mark quote as ACCEPTED and CONVERTED
-    quote.status = 'CONVERTED';
+    const lockKey = `convert-quote:${tenantContext.organizationId}:${quoteId}`;
+    this.acquireLock(lockKey);
 
-    // Create Invoice from Quote snapshot
-    const createInvoiceDto: CreateInvoiceDto = {
-      customerId: quote.customerId,
-      quoteId: quote.id,
-      lineItems: quote.lineItems.map((l) => ({
-        productServiceId: l.productServiceId,
-        description: l.description,
-        quantity: l.quantity,
-        unitPrice: l.unitPrice,
-        taxRate: l.taxRate,
-        discountPercent: l.discountPercent,
-      })),
-    };
+    try {
+      const quote = this.findOneQuote(tenantContext, quoteId, userPermissions);
 
-    return this.createInvoice(tenantContext, createInvoiceDto, userPermissions);
+      if (quote.status === 'CONVERTED') {
+        throw new Error(`QUOTE_ALREADY_CONVERTED: Quote ${quoteId} is already converted`);
+      }
+
+      // Mark quote as CONVERTED
+      quote.status = 'CONVERTED';
+
+      // Create Invoice from Quote snapshot
+      const createInvoiceDto: CreateInvoiceDto = {
+        customerId: quote.customerId,
+        quoteId: quote.id,
+        mutationId,
+        lineItems: quote.lineItems.map((l) => ({
+          productServiceId: l.productServiceId,
+          description: l.description,
+          quantity: l.quantity,
+          unitPrice: l.unitPrice,
+          taxRate: l.taxRate,
+          discountPercent: l.discountPercent,
+        })),
+      };
+
+      const invoice = this.createInvoice(tenantContext, createInvoiceDto, userPermissions);
+      if (mutationId) {
+        this.processedMutations.set(mutationId, invoice);
+      }
+      return invoice;
+    } finally {
+      this.releaseLock(lockKey);
+    }
   }
 
   public static deleteQuote(
@@ -268,6 +310,10 @@ export class SalesService {
     RolesGuard.enforcePermission(userPermissions, 'nexus:invoices:create');
     const orgId = tenantContext.organizationId;
 
+    if (dto.mutationId && this.processedMutations.has(dto.mutationId)) {
+      return this.processedMutations.get(dto.mutationId);
+    }
+
     const { processedLines, totalUntaxed, totalTax, totalAmount } = this.processLineItems(
       dto.lineItems || []
     );
@@ -295,6 +341,9 @@ export class SalesService {
     };
 
     this.invoicesStore.push(newInvoice);
+    if (dto.mutationId) {
+      this.processedMutations.set(dto.mutationId, newInvoice);
+    }
     return newInvoice;
   }
 
@@ -335,7 +384,7 @@ export class SalesService {
       totalUntaxed,
       totalTax,
       totalAmount,
-      amountDue: Number((totalAmount - existing.amountPaid).toFixed(2)),
+      amountDue: Math.round((totalAmount - existing.amountPaid) * 100) / 100,
       lineItems: processedLines,
     };
 
@@ -382,52 +431,67 @@ export class SalesService {
     RolesGuard.enforcePermission(userPermissions, 'nexus:payments:create');
     const orgId = tenantContext.organizationId;
 
-    const invoice = this.findOneInvoice(tenantContext, dto.invoiceId, userPermissions);
-
-    const paymentAmount = Number(dto.amount.toFixed(2));
-
-    // Anti-overpayment rule: Strictly reject payment exceeding invoice balance due
-    if (paymentAmount <= 0) {
-      throw new Error('INVALID_PAYMENT_AMOUNT: Payment amount must be positive');
+    if (dto.mutationId && this.processedMutations.has(dto.mutationId)) {
+      return this.processedMutations.get(dto.mutationId);
     }
 
-    if (paymentAmount > invoice.amountDue + 0.001) {
-      throw new Error(
-        `OVERPAYMENT_REJECTED: Payment amount (${paymentAmount}) exceeds invoice balance due (${invoice.amountDue})`
-      );
+    // Acquire atomic row lock on invoice ID to prevent concurrent overpayments
+    const lockKey = `invoice-payment:${orgId}:${dto.invoiceId}`;
+    this.acquireLock(lockKey);
+
+    try {
+      const invoice = this.findOneInvoice(tenantContext, dto.invoiceId, userPermissions);
+
+      const paymentAmount = Math.round(dto.amount * 100) / 100;
+
+      // Anti-overpayment rule: Strictly reject payment exceeding invoice balance due
+      if (paymentAmount <= 0) {
+        throw new Error('INVALID_PAYMENT_AMOUNT: Payment amount must be positive');
+      }
+
+      if (paymentAmount > invoice.amountDue + 0.001) {
+        throw new Error(
+          `OVERPAYMENT_REJECTED: Payment amount (${paymentAmount}) exceeds invoice balance due (${invoice.amountDue})`
+        );
+      }
+
+      // Atomic update of Invoice payment balances
+      const newAmountPaid = Math.round((invoice.amountPaid + paymentAmount) * 100) / 100;
+      const newAmountDue = Math.round((invoice.totalAmount - newAmountPaid) * 100) / 100;
+
+      invoice.amountPaid = newAmountPaid;
+      invoice.amountDue = Math.max(0, newAmountDue);
+
+      if (invoice.amountDue <= 0.001) {
+        invoice.status = 'PAID';
+        invoice.amountDue = 0;
+      } else {
+        invoice.status = 'PARTIAL';
+      }
+
+      const officialPaymentNumber = this.getNextDocumentNumber(orgId, 'PAY');
+
+      const newPayment: PaymentDto = {
+        id: `pay-${crypto.randomUUID()}`,
+        organizationId: orgId,
+        customerId: invoice.customerId,
+        invoiceId: invoice.id,
+        paymentNumber: officialPaymentNumber,
+        amount: paymentAmount,
+        paymentMethod: dto.paymentMethod,
+        referenceCode: dto.referenceCode,
+        paymentDate: dto.paymentDate || new Date().toISOString(),
+        createdAt: new Date().toISOString(),
+      };
+
+      this.paymentsStore.push(newPayment);
+      if (dto.mutationId) {
+        this.processedMutations.set(dto.mutationId, newPayment);
+      }
+      return newPayment;
+    } finally {
+      this.releaseLock(lockKey);
     }
-
-    // Atomic update of Invoice payment balances
-    const newAmountPaid = Number((invoice.amountPaid + paymentAmount).toFixed(2));
-    const newAmountDue = Number((invoice.totalAmount - newAmountPaid).toFixed(2));
-
-    invoice.amountPaid = newAmountPaid;
-    invoice.amountDue = Math.max(0, newAmountDue);
-
-    if (invoice.amountDue <= 0.001) {
-      invoice.status = 'PAID';
-      invoice.amountDue = 0;
-    } else {
-      invoice.status = 'PARTIAL';
-    }
-
-    const officialPaymentNumber = this.getNextDocumentNumber(orgId, 'PAY');
-
-    const newPayment: PaymentDto = {
-      id: `pay-${crypto.randomUUID()}`,
-      organizationId: orgId,
-      customerId: invoice.customerId,
-      invoiceId: invoice.id,
-      paymentNumber: officialPaymentNumber,
-      amount: paymentAmount,
-      paymentMethod: dto.paymentMethod,
-      referenceCode: dto.referenceCode,
-      paymentDate: dto.paymentDate || new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    };
-
-    this.paymentsStore.push(newPayment);
-    return newPayment;
   }
 
   // Helper for testing resets
@@ -436,5 +500,7 @@ export class SalesService {
     this.quotesStore = [];
     this.invoicesStore = [];
     this.paymentsStore = [];
+    this.processedMutations.clear();
+    this.locks.clear();
   }
 }

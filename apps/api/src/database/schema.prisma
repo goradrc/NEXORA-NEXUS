@@ -199,6 +199,7 @@ model Customer {
   deliveryNotes DeliveryNote[]
   payments     Payment[]
 
+  @@unique([organizationId, code])
   @@map("customers")
 }
 
@@ -222,6 +223,7 @@ model Supplier {
   purchaseOrders   PurchaseOrder[]
   expenses         Expense[]
 
+  @@unique([organizationId, code])
   @@map("suppliers")
 }
 
@@ -241,6 +243,7 @@ model Employee {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
 
+  @@unique([organizationId, employeeNumber])
   @@map("employees")
 }
 
@@ -285,6 +288,7 @@ model ProductService {
   stockMovements  StockMovement[]
   lineItems       LineItem[]
 
+  @@unique([organizationId, reference])
   @@map("products_services")
 }
 
@@ -336,6 +340,7 @@ model PurchaseOrder {
   supplier     Supplier     @relation(fields: [supplierId], references: [id])
   lineItems    LineItem[]
 
+  @@unique([organizationId, poNumber])
   @@map("purchase_orders")
 }
 
@@ -363,6 +368,7 @@ model Quote {
   invoices     Invoice[]
   lineItems    LineItem[]
 
+  @@unique([organizationId, quoteNumber])
   @@map("quotes")
 }
 
@@ -396,6 +402,7 @@ model Invoice {
   payments      Payment[]
   lineItems     LineItem[]
 
+  @@unique([organizationId, invoiceNumber])
   @@map("invoices")
 }
 
@@ -427,6 +434,7 @@ model DeliveryNote {
   invoice      Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
   lineItems    LineItem[]
 
+  @@unique([organizationId, deliveryNumber])
   @@map("delivery_notes")
 }
 
@@ -439,7 +447,7 @@ enum DeliveryStatus {
 
 model LineItem {
   id               String  @id @default(uuid())
-  productServiceId String  @map("product_service_id")
+  productServiceId String? @map("product_service_id")
   quoteId          String? @map("quote_id")
   invoiceId        String? @map("invoice_id")
   deliveryNoteId   String? @map("delivery_note_id")
@@ -451,11 +459,11 @@ model LineItem {
   discountPercent  Float   @default(0.0) @map("discount_percent")
   totalPrice       Float   @map("total_price")
 
-  productService ProductService @relation(fields: [productServiceId], references: [id])
-  quote          Quote?         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  invoice        Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  deliveryNote   DeliveryNote?  @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
-  purchaseOrder  PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productService ProductService? @relation(fields: [productServiceId], references: [id], onDelete: SetNull)
+  quote          Quote?          @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  invoice        Invoice?        @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  deliveryNote   DeliveryNote?   @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
+  purchaseOrder  PurchaseOrder?  @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
 
   @@map("line_items")
 }
@@ -476,6 +484,7 @@ model Payment {
   customer     Customer     @relation(fields: [customerId], references: [id])
   invoice      Invoice      @relation(fields: [invoiceId], references: [id])
 
+  @@unique([organizationId, paymentNumber])
   @@map("payments")
 }
 

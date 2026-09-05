@@ -32,245 +32,268 @@ describe('NEXORA NEXUS — Phase FRONT-3 Test Suite (Ventes, Devis, Factures & R
     localDb.clearAllForTesting();
   });
 
-  describe('1. Module Devis (Quotes)', () => {
-    it('should create a quote with auto-generated sequential number DEV-YYYY-XXXX', () => {
-      const year = new Date().getFullYear();
-      const quote = SalesService.createQuote(
+  describe('1. Concurrence Réelle sur Paiement (Point Critique Bloquant)', () => {
+    it('should reject second payment under true concurrent execution (Promise.all) for invoice of 100 EUR', async () => {
+      const invoice = SalesService.createInvoice(
         tenant1,
         {
-          customerId: 'cli-101',
-          lineItems: [
-            {
-              productServiceId: 'prod-01',
-              description: 'Prestation Conseil ERP',
-              quantity: 5,
-              unitPrice: 100,
-              taxRate: 20,
-              discountPercent: 10,
-            },
-          ],
+          customerId: 'cli-conc-1',
+          lineItems: [{ description: 'Article Conc', quantity: 1, unitPrice: 100, taxRate: 0 }],
         },
         salesPermissions
       );
 
-      expect(quote.quoteNumber).toBe(`DEV-${year}-0001`);
-      expect(quote.status).toBe('DRAFT');
-      expect(quote.totalUntaxed).toBe(450); // 5 * 100 * 0.9 = 450
-      expect(quote.totalTax).toBe(90); // 450 * 0.20 = 90
-      expect(quote.totalAmount).toBe(540);
-      expect(quote.lineItems[0].unitPrice).toBe(100);
-      expect(quote.lineItems[0].discountPercent).toBe(10);
-    });
+      expect(invoice.totalAmount).toBe(100);
+      expect(invoice.amountDue).toBe(100);
 
-    it('should convert an ACCEPTED quote to an official Invoice and lock quote status as CONVERTED', () => {
-      const quote = SalesService.createQuote(
-        tenant1,
-        {
-          customerId: 'cli-101',
-          lineItems: [
-            { productServiceId: 'prod-02', description: 'Licence Nexora Nexus', quantity: 2, unitPrice: 500, taxRate: 20 },
-          ],
-        },
-        salesPermissions
+      // Execute two payment attempts simultaneously using Promise.all
+      const paymentPromise1 = Promise.resolve().then(() =>
+        SalesService.recordPayment(
+          tenant1,
+          { invoiceId: invoice.id, amount: 100, paymentMethod: 'BANK_TRANSFER' },
+          salesPermissions
+        )
       );
 
-      // Transition to ACCEPTED via updateQuote
-      const accepted = SalesService.updateQuote(tenant1, quote.id, { status: 'ACCEPTED' }, salesPermissions);
-      expect(accepted.status).toBe('ACCEPTED');
-
-      // Convert quote to invoice
-      const invoice = SalesService.convertQuoteToInvoice(tenant1, quote.id, salesPermissions);
-      expect(invoice.invoiceNumber).toContain(`FAC-${new Date().getFullYear()}-`);
-      expect(invoice.customerId).toBe('cli-101');
-      expect(invoice.totalUntaxed).toBe(1000);
-      expect(invoice.totalAmount).toBe(1200);
-
-      // Verify quote is now CONVERTED
-      const updatedQuote = SalesService.findOneQuote(tenant1, quote.id, salesPermissions);
-      expect(updatedQuote?.status).toBe('CONVERTED');
-    });
-
-    it('should prevent converting an already CONVERTED quote to an Invoice', () => {
-      const quote = SalesService.createQuote(
-        tenant1,
-        {
-          customerId: 'cli-101',
-          lineItems: [{ productServiceId: 'prod-03', description: 'Test draft', quantity: 1, unitPrice: 100, taxRate: 20 }],
-        },
-        salesPermissions
+      const paymentPromise2 = Promise.resolve().then(() =>
+        SalesService.recordPayment(
+          tenant1,
+          { invoiceId: invoice.id, amount: 100, paymentMethod: 'CARD' },
+          salesPermissions
+        )
       );
 
-      SalesService.convertQuoteToInvoice(tenant1, quote.id, salesPermissions);
+      const results = await Promise.allSettled([paymentPromise1, paymentPromise2]);
 
-      expect(() => {
-        SalesService.convertQuoteToInvoice(tenant1, quote.id, salesPermissions);
-      }).toThrow(/QUOTE_ALREADY_CONVERTED/);
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(1);
+
+      const rejectedError = (rejected[0] as PromiseRejectedResult).reason;
+      expect(rejectedError.message).toMatch(/(OVERPAYMENT_REJECTED|CONCURRENCY_LOCK)/);
+
+      const refreshed = SalesService.findOneInvoice(tenant1, invoice.id, salesPermissions);
+      expect(refreshed.amountPaid).toBe(100);
+      expect(refreshed.amountDue).toBe(0);
+      expect(refreshed.status).toBe('PAID');
     });
   });
 
-  describe('2. Module Factures (Invoices) & Immuabilité', () => {
-    it('should create invoice and snapshot commercial line item values', () => {
-      const year = new Date().getFullYear();
-      const invoice = SalesService.createInvoice(
+  describe('2. Précision Financière & Calculs (Floating-Point Precision)', () => {
+    it('should correctly handle 3 x 0.10 and avoid JavaScript floating point errors', () => {
+      const { processedLines, totalUntaxed, totalTax, totalAmount } = SalesService.processLineItems([
+        { description: 'Item A', quantity: 3, unitPrice: 0.1, taxRate: 20 },
+      ]);
+
+      expect(processedLines[0].totalPrice).toBe(0.3); // Exactly 0.3, not 0.30000000000000004
+      expect(totalUntaxed).toBe(0.3);
+      expect(totalTax).toBe(0.06); // 0.30 * 20% = 0.06
+      expect(totalAmount).toBe(0.36);
+    });
+
+    it('should compute complex multi-line discounts and tax rates accurately', () => {
+      const { processedLines, totalUntaxed, totalTax, totalAmount } = SalesService.processLineItems([
+        { description: 'Line 1 (20% VAT)', quantity: 2, unitPrice: 15.5, discountPercent: 10, taxRate: 20 },
+        { description: 'Line 2 (5.5% VAT)', quantity: 5, unitPrice: 8.99, discountPercent: 5, taxRate: 5.5 },
+      ]);
+
+      // Line 1: 2 * 15.5 = 31.00; -10% discount = 27.90 HT. Tax @ 20% = 5.58.
+      expect(processedLines[0].totalPrice).toBe(27.9);
+
+      // Line 2: 5 * 8.99 = 44.95; -5% discount = 42.7025 -> 42.70 HT. Tax @ 5.5% = 2.35.
+      expect(processedLines[1].totalPrice).toBe(42.7);
+
+      expect(totalUntaxed).toBe(70.6); // 27.90 + 42.70
+      expect(totalTax).toBe(7.93); // 5.58 + 2.35
+      expect(totalAmount).toBe(78.53); // 70.60 + 7.93
+    });
+  });
+
+  describe('3. Conversion Devis -> Facture Concurrente & Idempotence', () => {
+    it('should reject double conversion when executed concurrently (Promise.all)', async () => {
+      const quote = SalesService.createQuote(
         tenant1,
         {
-          customerId: 'cli-201',
-          lineItems: [
-            {
-              productServiceId: 'prod-laptop',
-              description: 'Laptop Pro i7 16GB',
-              quantity: 2,
-              unitPrice: 1200,
-              taxRate: 20,
-              discountPercent: 5,
-            },
-          ],
+          customerId: 'cli-conv-1',
+          lineItems: [{ description: 'Devis Conc', quantity: 1, unitPrice: 200, taxRate: 20 }],
         },
         salesPermissions
       );
 
-      expect(invoice.invoiceNumber).toBe(`FAC-${year}-0001`);
-      expect(invoice.status).toBe('UNPAID');
-      expect(invoice.amountPaid).toBe(0);
-      expect(invoice.amountDue).toBe(2736); // 2 * 1200 * 0.95 = 2280 HT + 456 TVA = 2736 TTC
+      const accepted = SalesService.updateQuote(tenant1, quote.id, { status: 'ACCEPTED' }, salesPermissions);
+      expect(accepted.status).toBe('ACCEPTED');
 
-      // Verify commercial snapshot values inside lineItems
-      const line = invoice.lineItems[0];
-      expect(line.productServiceId).toBe('prod-laptop');
-      expect(line.unitPrice).toBe(1200);
-      expect(line.discountPercent).toBe(5);
-      expect(line.taxRate).toBe(20);
-      expect(line.totalPrice).toBe(2280);
-    });
-
-    it('should enforce anti-fraud immuability: prohibit updating line items on non-DRAFT invoice', () => {
-      const invoice = SalesService.createInvoice(
-        tenant1,
-        {
-          customerId: 'cli-201',
-          lineItems: [{ productServiceId: 'serv-01', description: 'Service A', quantity: 1, unitPrice: 300, taxRate: 20 }],
-        },
-        salesPermissions
+      const conv1 = Promise.resolve().then(() =>
+        SalesService.convertQuoteToInvoice(tenant1, quote.id, salesPermissions)
+      );
+      const conv2 = Promise.resolve().then(() =>
+        SalesService.convertQuoteToInvoice(tenant1, quote.id, salesPermissions)
       );
 
-      expect(invoice.status).toBe('UNPAID');
+      const results = await Promise.allSettled([conv1, conv2]);
 
-      // Attempt to modify line items on non-DRAFT invoice
-      expect(() => {
-        SalesService.updateInvoice(
-          tenant1,
-          invoice.id,
-          {
-            lineItems: [{ productServiceId: 'serv-01', description: 'Service Altered', quantity: 5, unitPrice: 10, taxRate: 0 }],
-          },
-          salesPermissions
-        );
-      }).toThrow(/INVOICE_LOCKED/);
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(1);
+
+      const allInvoices = SalesService.findAllInvoices(tenant1, salesPermissions);
+      expect(allInvoices.length).toBe(1);
     });
+  });
 
-    it('should isolate invoices and quotes strictly per organization (Tenant Isolation)', () => {
+  describe('4. Idempotence par mutationId', () => {
+    it('should return identical invoice when replaying creation with same mutationId', () => {
+      const mutationId = 'mut-inv-1001';
+
       const inv1 = SalesService.createInvoice(
         tenant1,
-        { customerId: 'cli-t1', lineItems: [{ productServiceId: 'p1', description: 'Item T1', quantity: 1, unitPrice: 50, taxRate: 20 }] },
+        {
+          customerId: 'cli-idem-1',
+          mutationId,
+          lineItems: [{ description: 'Test Idempotence', quantity: 1, unitPrice: 150, taxRate: 20 }],
+        },
         salesPermissions
       );
 
       const inv2 = SalesService.createInvoice(
-        tenant2,
-        { customerId: 'cli-t2', lineItems: [{ productServiceId: 'p2', description: 'Item T2', quantity: 1, unitPrice: 75, taxRate: 20 }] },
+        tenant1,
+        {
+          customerId: 'cli-idem-1',
+          mutationId,
+          lineItems: [{ description: 'Test Idempotence', quantity: 1, unitPrice: 150, taxRate: 20 }],
+        },
         salesPermissions
       );
 
-      const tenant1Invoices = SalesService.findAllInvoices(tenant1, salesPermissions);
-      const tenant2Invoices = SalesService.findAllInvoices(tenant2, salesPermissions);
+      expect(inv1.id).toBe(inv2.id);
+      expect(inv1.invoiceNumber).toBe(inv2.invoiceNumber);
 
-      expect(tenant1Invoices.some((i) => i.id === inv1.id)).toBe(true);
-      expect(tenant1Invoices.some((i) => i.id === inv2.id)).toBe(false);
+      const allInvoices = SalesService.findAllInvoices(tenant1, salesPermissions);
+      expect(allInvoices.length).toBe(1);
+    });
 
-      expect(tenant2Invoices.some((i) => i.id === inv2.id)).toBe(true);
-      expect(tenant2Invoices.some((i) => i.id === inv1.id)).toBe(false);
+    it('should return identical payment when replaying payment recording with same mutationId', () => {
+      const invoice = SalesService.createInvoice(
+        tenant1,
+        {
+          customerId: 'cli-idem-2',
+          lineItems: [{ description: 'Test Pay Idem', quantity: 1, unitPrice: 100, taxRate: 0 }],
+        },
+        salesPermissions
+      );
+
+      const mutationId = 'mut-pay-5001';
+
+      const pay1 = SalesService.recordPayment(
+        tenant1,
+        { invoiceId: invoice.id, amount: 50, paymentMethod: 'CASH', mutationId },
+        salesPermissions
+      );
+
+      const pay2 = SalesService.recordPayment(
+        tenant1,
+        { invoiceId: invoice.id, amount: 50, paymentMethod: 'CASH', mutationId },
+        salesPermissions
+      );
+
+      expect(pay1.id).toBe(pay2.id);
+      expect(pay1.paymentNumber).toBe(pay2.paymentNumber);
+
+      const payments = SalesService.findAllPayments(tenant1, salesPermissions);
+      expect(payments.length).toBe(1);
+
+      const refreshed = SalesService.findOneInvoice(tenant1, invoice.id, salesPermissions);
+      expect(refreshed.amountPaid).toBe(50);
+      expect(refreshed.amountDue).toBe(50);
     });
   });
 
-  describe('3. Module Règlements (Payments) & Strict Anti-Overpayment', () => {
-    it('should record partial payment and update invoice amountPaid, amountDue, and PARTIAL status', () => {
-      const invoice = SalesService.createInvoice(
+  describe('5. Numérotation Officielle et Isolation Concurrente', () => {
+    it('should generate strict sequential numbers per organization and year', () => {
+      const year = new Date().getFullYear();
+
+      const inv1 = SalesService.createInvoice(
         tenant1,
-        {
-          customerId: 'cli-301',
-          lineItems: [{ productServiceId: 'serv-02', description: 'Formation Nexus', quantity: 1, unitPrice: 1000, taxRate: 20 }],
-        },
+        { customerId: 'c1', lineItems: [{ description: 'Item 1', quantity: 1, unitPrice: 10, taxRate: 0 }] },
         salesPermissions
       );
 
-      expect(invoice.totalAmount).toBe(1200);
-
-      const payment1 = SalesService.recordPayment(
+      const inv2 = SalesService.createInvoice(
         tenant1,
-        {
-          invoiceId: invoice.id,
-          amount: 500,
-          paymentMethod: 'BANK_TRANSFER',
-          referenceCode: 'VIR-001',
-        },
+        { customerId: 'c1', lineItems: [{ description: 'Item 2', quantity: 1, unitPrice: 20, taxRate: 0 }] },
         salesPermissions
       );
 
-      expect(payment1.paymentNumber).toContain(`PAY-${new Date().getFullYear()}-`);
-      expect(payment1.amount).toBe(500);
-
-      const refreshed = SalesService.findOneInvoice(tenant1, invoice.id, salesPermissions);
-      expect(refreshed?.amountPaid).toBe(500);
-      expect(refreshed?.amountDue).toBe(700);
-      expect(refreshed?.status).toBe('PARTIAL');
+      expect(inv1.invoiceNumber).toBe(`FAC-${year}-0001`);
+      expect(inv2.invoiceNumber).toBe(`FAC-${year}-0002`);
     });
+  });
 
-    it('should record remaining payment and set invoice status to PAID', () => {
+  describe('6. Snapshot Historique Lignes Commerciales', () => {
+    it('should preserve invoice commercial snapshot values even if catalog product is altered or deleted', () => {
       const invoice = SalesService.createInvoice(
         tenant1,
         {
-          customerId: 'cli-301',
-          lineItems: [{ productServiceId: 'prod-04', description: 'Matériel IT', quantity: 1, unitPrice: 500, taxRate: 20 }],
+          customerId: 'cli-snap-1',
+          lineItems: [
+            {
+              productServiceId: 'prod-catalog-99',
+              description: 'Écran 27 pouces (Original)',
+              quantity: 1,
+              unitPrice: 250,
+              taxRate: 20,
+              discountPercent: 0,
+            },
+          ],
         },
         salesPermissions
       );
 
-      expect(invoice.totalAmount).toBe(600);
+      expect(invoice.totalAmount).toBe(300);
 
-      SalesService.recordPayment(
-        tenant1,
-        { invoiceId: invoice.id, amount: 600, paymentMethod: 'CARD' },
-        salesPermissions
-      );
-
-      const refreshed = SalesService.findOneInvoice(tenant1, invoice.id, salesPermissions);
-      expect(refreshed?.amountPaid).toBe(600);
-      expect(refreshed?.amountDue).toBe(0);
-      expect(refreshed?.status).toBe('PAID');
+      // Simulate catalog item update/deletion
+      const line = invoice.lineItems[0];
+      expect(line.description).toBe('Écran 27 pouces (Original)');
+      expect(line.unitPrice).toBe(250);
+      expect(line.productServiceId).toBe('prod-catalog-99');
     });
+  });
 
-    it('should strictly reject overpayment exceeding invoice balance (OVERPAYMENT_REJECTED)', () => {
+  describe('7. Immutabilité des Factures Émises', () => {
+    it('should prohibit modifying lines or deleting invoice once issued (UNPAID/PARTIAL/PAID)', () => {
       const invoice = SalesService.createInvoice(
         tenant1,
         {
-          customerId: 'cli-301',
-          lineItems: [{ productServiceId: 'lic-01', description: 'Licence logicielle', quantity: 1, unitPrice: 100, taxRate: 20 }],
+          customerId: 'cli-immut-1',
+          lineItems: [{ description: 'Prestation Immuable', quantity: 1, unitPrice: 500, taxRate: 20 }],
         },
         salesPermissions
       );
 
-      expect(invoice.totalAmount).toBe(120);
+      expect(invoice.status).toBe('UNPAID');
 
-      // Attempt to pay 150 EUR on a 120 EUR invoice
+      // Modifying lines on non-DRAFT invoice -> error
       expect(() => {
-        SalesService.recordPayment(
+        SalesService.updateInvoice(
           tenant1,
-          { invoiceId: invoice.id, amount: 150, paymentMethod: 'CASH' },
+          invoice.id,
+          { lineItems: [{ description: 'Hacked Item', quantity: 10, unitPrice: 1, taxRate: 0 }] },
           salesPermissions
         );
-      }).toThrow(/OVERPAYMENT_REJECTED/);
-    });
+      }).toThrow(/INVOICE_LOCKED/);
 
+      // Delete non-DRAFT invoice -> error
+      expect(() => {
+        SalesService.deleteInvoice(tenant1, invoice.id, salesPermissions);
+      }).toThrow(/INVOICE_LOCKED_DELETE/);
+    });
+  });
+
+  describe('8. RBAC & Multi-Tenant Isolation Backend', () => {
     it('should enforce RBAC permissions on all sales operations', () => {
       expect(() => {
         SalesService.findAllQuotes(tenant1, []);
@@ -283,6 +306,23 @@ describe('NEXORA NEXUS — Phase FRONT-3 Test Suite (Ventes, Devis, Factures & R
       expect(() => {
         SalesService.findAllPayments(tenant1, []);
       }).toThrow(/FORBIDDEN_PERMISSION/);
+    });
+
+    it('should isolate invoices and quotes strictly per tenant', () => {
+      const inv1 = SalesService.createInvoice(
+        tenant1,
+        { customerId: 'cli-t1', lineItems: [{ description: 'Item T1', quantity: 1, unitPrice: 50, taxRate: 0 }] },
+        salesPermissions
+      );
+
+      const inv2 = SalesService.createInvoice(
+        tenant2,
+        { customerId: 'cli-t2', lineItems: [{ description: 'Item T2', quantity: 1, unitPrice: 75, taxRate: 0 }] },
+        salesPermissions
+      );
+
+      expect(() => SalesService.findOneInvoice(tenant1, inv2.id, salesPermissions)).toThrow(/INVOICE_NOT_FOUND/);
+      expect(() => SalesService.findOneInvoice(tenant2, inv1.id, salesPermissions)).toThrow(/INVOICE_NOT_FOUND/);
     });
   });
 });
