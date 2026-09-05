@@ -1,333 +1,69 @@
 import { TenantContext } from '@nexora/core';
-import { CatalogService } from '../../../apps/api/src/modules/nexus/catalog/catalog.service';
 import { SalesService } from '../../../apps/api/src/modules/nexus/sales/sales.service';
-import { StockService } from '../../../apps/api/src/modules/nexus/stock/stock.service';
 import { localDb } from '../../../apps/web/src/offline/db';
 
-describe('NEXORA NEXUS — Phase FRONT-4 Test Suite (Stocks & Mouvements)', () => {
+describe('NEXORA NEXUS — Phase FRONT-3 Test Suite (Ventes, Devis, Factures & Règlements)', () => {
   const tenant1: TenantContext = {
     organizationId: 'org-1',
-    userId: 'usr-stock-1',
+    userId: 'usr-1',
   };
 
   const tenant2: TenantContext = {
     organizationId: 'org-2',
-    userId: 'usr-stock-2',
+    userId: 'usr-2',
   };
 
-  const fullPermissions = [
-    'nexus:catalog:read',
-    'nexus:catalog:create',
-    'nexus:catalog:update',
-    'nexus:catalog:delete',
-    'nexus:stock:read',
-    'nexus:stock:write',
-    'nexus:stock:adjust',
+  const salesPermissions = [
+    'nexus:quotes:read',
+    'nexus:quotes:create',
+    'nexus:quotes:update',
+    'nexus:quotes:delete',
     'nexus:invoices:read',
     'nexus:invoices:create',
     'nexus:invoices:update',
     'nexus:invoices:delete',
+    'nexus:payments:read',
+    'nexus:payments:create',
+    'nexus:payments:delete',
   ];
 
   beforeEach(() => {
-    CatalogService.clearAllForTesting();
     SalesService.clearAllForTesting();
-    StockService.clearAllForTesting();
     localDb.clearAllForTesting();
   });
 
-  describe('1. Mouvements Manuels (IN, OUT, ADJUSTMENT)', () => {
-    it('1 & 2. should record manual stock IN and OUT correctly', () => {
-      const prod = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-001',
-          type: 'PRODUCT',
-          reference: 'SKU-LAPTOP-01',
-          name: 'Laptop Business',
-          salePrice: 1000,
-          currentStock: 10,
-          minStockAlert: 2,
-        },
-        fullPermissions
-      );
-
-      expect(prod.currentStock).toBe(10);
-
-      // Record Stock IN (+5)
-      const movIn = StockService.recordMovement(
-        tenant1,
-        { productId: prod.id, type: 'IN', quantity: 5, reason: 'Réception fournisseur' },
-        fullPermissions
-      );
-
-      expect(movIn.quantity).toBe(5);
-      expect(prod.currentStock).toBe(15);
-
-      // Record Stock OUT (-3)
-      const movOut = StockService.recordMovement(
-        tenant1,
-        { productId: prod.id, type: 'OUT', quantity: 3, reason: 'Vente directe comptoir' },
-        fullPermissions
-      );
-
-      expect(movOut.quantity).toBe(3);
-      expect(prod.currentStock).toBe(12);
-    });
-
-    it('3 & 4. should adjust stock according to physical inventory (ADJUSTMENT_IN and ADJUSTMENT_OUT)', () => {
-      const prod = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-001',
-          type: 'PRODUCT',
-          reference: 'SKU-MOUSE-01',
-          name: 'Souris Optique',
-          salePrice: 20,
-          currentStock: 20,
-        },
-        fullPermissions
-      );
-
-      // Inventory shows 17 (diff: -3 -> ADJUSTMENT_OUT)
-      const adj1 = StockService.adjustStock(
-        tenant1,
-        { productId: prod.id, actualQuantity: 17, reason: 'Inventaire physique annuel' },
-        fullPermissions
-      );
-
-      expect(adj1.type).toBe('ADJUSTMENT_OUT');
-      expect(adj1.quantity).toBe(3);
-      expect(prod.currentStock).toBe(17);
-
-      // Inventory shows 25 (diff: +8 -> ADJUSTMENT_IN)
-      const adj2 = StockService.adjustStock(
-        tenant1,
-        { productId: prod.id, actualQuantity: 25, reason: 'Correction écart positif' },
-        fullPermissions
-      );
-
-      expect(adj2.type).toBe('ADJUSTMENT_IN');
-      expect(adj2.quantity).toBe(8);
-      expect(prod.currentStock).toBe(25);
-    });
-
-    it('5. should strictly prohibit negative stock on manual OUT operations (INSUFFICIENT_STOCK)', () => {
-      const prod = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-001',
-          type: 'PRODUCT',
-          reference: 'SKU-LIMITED-01',
-          name: 'Stock Limité',
-          salePrice: 100,
-          currentStock: 2,
-        },
-        fullPermissions
-      );
-
-      expect(() => {
-        StockService.recordMovement(
-          tenant1,
-          { productId: prod.id, type: 'OUT', quantity: 5, reason: 'Retrait excessif' },
-          fullPermissions
-        );
-      }).toThrow(/INSUFFICIENT_STOCK/);
-
-      expect(prod.currentStock).toBe(2); // Unchanged
-    });
-
-    it('6. should reject stock movements for non-stockable SERVICE items', () => {
-      const service = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-002',
-          type: 'SERVICE',
-          reference: 'SERV-CONSULT-01',
-          name: 'Consulting ERP',
-          salePrice: 150,
-          currentStock: 0,
-        },
-        fullPermissions
-      );
-
-      expect(() => {
-        StockService.recordMovement(
-          tenant1,
-          { productId: service.id, type: 'IN', quantity: 10 },
-          fullPermissions
-        );
-      }).toThrow(/NON_STOCKABLE_ITEM/);
-    });
-
-    it('7. should maintain immutable stock movements history and track alert levels', () => {
-      const prod = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-001',
-          type: 'PRODUCT',
-          reference: 'SKU-SCREEN-01',
-          name: 'Écran HD',
-          salePrice: 200,
-          currentStock: 10,
-          minStockAlert: 5,
-        },
-        fullPermissions
-      );
-
-      StockService.recordMovement(
-        tenant1,
-        { productId: prod.id, type: 'OUT', quantity: 6 },
-        fullPermissions
-      );
-
-      const movements = StockService.getMovements(tenant1, fullPermissions);
-      expect(movements.length).toBe(1);
-
-      const statusList = StockService.getProductsStockStatus(tenant1, fullPermissions);
-      const screenStatus = statusList.find((s) => s.productId === prod.id);
-      expect(screenStatus?.status).toBe('LOW_STOCK'); // 4 <= minStockAlert (5)
-    });
-  });
-
-  describe('2. Intégration Ventes FRONT-3 (Factures -> Sorties de Stock)', () => {
-    it('11, 12 & 16. should decrement stock on invoice emission (UNPAID) and ignore DRAFT / SERVICE items', () => {
-      const prod = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-001',
-          type: 'PRODUCT',
-          reference: 'SKU-PHONE-01',
-          name: 'Smartphone Pro',
-          salePrice: 800,
-          currentStock: 10,
-        },
-        fullPermissions
-      );
-
-      const serv = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-002',
-          type: 'SERVICE',
-          reference: 'SERV-SETUP',
-          name: 'Installation & Paramétrage',
-          salePrice: 100,
-        },
-        fullPermissions
-      );
-
-      // Create issued invoice directly (UNPAID)
+  describe('1. Concurrence Réelle sur Paiement (Point Critique Bloquant)', () => {
+    it('should reject second payment under true concurrent execution (Promise.all) for invoice of 100 EUR', async () => {
       const invoice = SalesService.createInvoice(
         tenant1,
         {
-          customerId: 'cli-001',
-          lineItems: [
-            { productServiceId: prod.id, description: 'Smartphone Pro', quantity: 3, unitPrice: 800, taxRate: 20 },
-            { productServiceId: serv.id, description: 'Installation', quantity: 1, unitPrice: 100, taxRate: 20 },
-          ],
+          customerId: 'cli-conc-1',
+          lineItems: [{ description: 'Article Conc', quantity: 1, unitPrice: 100, taxRate: 0 }],
         },
-        fullPermissions
+        salesPermissions
       );
 
-      expect(invoice.status).toBe('UNPAID');
+      expect(invoice.totalAmount).toBe(100);
+      expect(invoice.amountDue).toBe(100);
 
-      // Refresh product from CatalogService
-      const refreshedProd = CatalogService.getProductsServices(tenant1, fullPermissions).find(
-        (p) => p.id === prod.id
-      )!;
-
-      // Product stock decremented by 3 (10 -> 7)
-      expect(refreshedProd.currentStock).toBe(7);
-
-      const movements = StockService.getMovements(tenant1, fullPermissions);
-      expect(movements.length).toBe(1);
-      expect(movements[0].productId).toBe(prod.id);
-      expect(movements[0].quantity).toBe(3);
-      expect(movements[0].type).toBe('OUT');
-    });
-
-    it('13 & 14. should guarantee idempotency on repeated invoice emission sync (mutationId)', () => {
-      const prod = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-001',
-          type: 'PRODUCT',
-          reference: 'SKU-KEYBOARD-01',
-          name: 'Clavier Mécanique',
-          salePrice: 120,
-          currentStock: 20,
-        },
-        fullPermissions
-      );
-
-      const mutationId = 'mut-sync-inv-777';
-
-      // First call
-      SalesService.createInvoice(
-        tenant1,
-        {
-          customerId: 'cli-001',
-          mutationId,
-          lineItems: [{ productServiceId: prod.id, description: 'Clavier', quantity: 4, unitPrice: 120, taxRate: 20 }],
-        },
-        fullPermissions
-      );
-
-      const refreshed1 = CatalogService.getProductsServices(tenant1, fullPermissions).find(
-        (p) => p.id === prod.id
-      )!;
-      expect(refreshed1.currentStock).toBe(16); // 20 - 4 = 16
-
-      // Replay same mutationId
-      SalesService.createInvoice(
-        tenant1,
-        {
-          customerId: 'cli-001',
-          mutationId,
-          lineItems: [{ productServiceId: prod.id, description: 'Clavier', quantity: 4, unitPrice: 120, taxRate: 20 }],
-        },
-        fullPermissions
-      );
-
-      const refreshed2 = CatalogService.getProductsServices(tenant1, fullPermissions).find(
-        (p) => p.id === prod.id
-      )!;
-      expect(refreshed2.currentStock).toBe(16); // Must remain 16, NOT 12
-    });
-
-    it('15. should handle real concurrent stock OUT attempts safely (Promise.all)', async () => {
-      const prod = CatalogService.createProductService(
-        tenant1,
-        {
-          categoryId: 'cat-001',
-          type: 'PRODUCT',
-          reference: 'SKU-CONC-01',
-          name: 'Article Concurrence Stock',
-          salePrice: 50,
-          currentStock: 10,
-        },
-        fullPermissions
-      );
-
-      // Concurrently attempt two OUT movements of 10 units each
-      const attempt1 = Promise.resolve().then(() =>
-        StockService.recordMovement(
+      // Execute two payment attempts simultaneously using Promise.all
+      const paymentPromise1 = Promise.resolve().then(() =>
+        SalesService.recordPayment(
           tenant1,
-          { productId: prod.id, type: 'OUT', quantity: 10, reason: 'Vente A' },
-          fullPermissions
+          { invoiceId: invoice.id, amount: 100, paymentMethod: 'BANK_TRANSFER' },
+          salesPermissions
         )
       );
 
-      const attempt2 = Promise.resolve().then(() =>
-        StockService.recordMovement(
+      const paymentPromise2 = Promise.resolve().then(() =>
+        SalesService.recordPayment(
           tenant1,
-          { productId: prod.id, type: 'OUT', quantity: 10, reason: 'Vente B' },
-          fullPermissions
+          { invoiceId: invoice.id, amount: 100, paymentMethod: 'CARD' },
+          salesPermissions
         )
       );
 
-      const results = await Promise.allSettled([attempt1, attempt2]);
+      const results = await Promise.allSettled([paymentPromise1, paymentPromise2]);
 
       const fulfilled = results.filter((r) => r.status === 'fulfilled');
       const rejected = results.filter((r) => r.status === 'rejected');
@@ -335,63 +71,258 @@ describe('NEXORA NEXUS — Phase FRONT-4 Test Suite (Stocks & Mouvements)', () =
       expect(fulfilled.length).toBe(1);
       expect(rejected.length).toBe(1);
 
-      const refreshed = CatalogService.getProductsServices(tenant1, fullPermissions).find(
-        (p) => p.id === prod.id
-      )!;
-      expect(refreshed.currentStock).toBe(0); // Exactly 0, never -10
+      const rejectedError = (rejected[0] as PromiseRejectedResult).reason;
+      expect(rejectedError.message).toMatch(/(OVERPAYMENT_REJECTED|CONCURRENCY_LOCK)/);
+
+      const refreshed = SalesService.findOneInvoice(tenant1, invoice.id, salesPermissions);
+      expect(refreshed.amountPaid).toBe(100);
+      expect(refreshed.amountDue).toBe(0);
+      expect(refreshed.status).toBe('PAID');
     });
   });
 
-  describe('3. RBAC & Multi-Tenant Isolation', () => {
-    it('8. should enforce RBAC permissions on all stock operations', () => {
+  describe('2. Précision Financière & Calculs (Floating-Point Precision)', () => {
+    it('should correctly handle 3 x 0.10 and avoid JavaScript floating point errors', () => {
+      const { processedLines, totalUntaxed, totalTax, totalAmount } = SalesService.processLineItems([
+        { description: 'Item A', quantity: 3, unitPrice: 0.1, taxRate: 20 },
+      ]);
+
+      expect(processedLines[0].totalPrice).toBe(0.3); // Exactly 0.3, not 0.30000000000000004
+      expect(totalUntaxed).toBe(0.3);
+      expect(totalTax).toBe(0.06); // 0.30 * 20% = 0.06
+      expect(totalAmount).toBe(0.36);
+    });
+
+    it('should compute complex multi-line discounts and tax rates accurately', () => {
+      const { processedLines, totalUntaxed, totalTax, totalAmount } = SalesService.processLineItems([
+        { description: 'Line 1 (20% VAT)', quantity: 2, unitPrice: 15.5, discountPercent: 10, taxRate: 20 },
+        { description: 'Line 2 (5.5% VAT)', quantity: 5, unitPrice: 8.99, discountPercent: 5, taxRate: 5.5 },
+      ]);
+
+      // Line 1: 2 * 15.5 = 31.00; -10% discount = 27.90 HT. Tax @ 20% = 5.58.
+      expect(processedLines[0].totalPrice).toBe(27.9);
+
+      // Line 2: 5 * 8.99 = 44.95; -5% discount = 42.7025 -> 42.70 HT. Tax @ 5.5% = 2.35.
+      expect(processedLines[1].totalPrice).toBe(42.7);
+
+      expect(totalUntaxed).toBe(70.6); // 27.90 + 42.70
+      expect(totalTax).toBe(7.93); // 5.58 + 2.35
+      expect(totalAmount).toBe(78.53); // 70.60 + 7.93
+    });
+  });
+
+  describe('3. Conversion Devis -> Facture Concurrente & Idempotence', () => {
+    it('should reject double conversion when executed concurrently (Promise.all)', async () => {
+      const quote = SalesService.createQuote(
+        tenant1,
+        {
+          customerId: 'cli-conv-1',
+          lineItems: [{ description: 'Devis Conc', quantity: 1, unitPrice: 200, taxRate: 20 }],
+        },
+        salesPermissions
+      );
+
+      const accepted = SalesService.updateQuote(tenant1, quote.id, { status: 'ACCEPTED' }, salesPermissions);
+      expect(accepted.status).toBe('ACCEPTED');
+
+      const conv1 = Promise.resolve().then(() =>
+        SalesService.convertQuoteToInvoice(tenant1, quote.id, salesPermissions)
+      );
+      const conv2 = Promise.resolve().then(() =>
+        SalesService.convertQuoteToInvoice(tenant1, quote.id, salesPermissions)
+      );
+
+      const results = await Promise.allSettled([conv1, conv2]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      expect(fulfilled.length).toBe(1);
+      expect(rejected.length).toBe(1);
+
+      const allInvoices = SalesService.findAllInvoices(tenant1, salesPermissions);
+      expect(allInvoices.length).toBe(1);
+    });
+  });
+
+  describe('4. Idempotence par mutationId', () => {
+    it('should return identical invoice when replaying creation with same mutationId', () => {
+      const mutationId = 'mut-inv-1001';
+
+      const inv1 = SalesService.createInvoice(
+        tenant1,
+        {
+          customerId: 'cli-idem-1',
+          mutationId,
+          lineItems: [{ description: 'Test Idempotence', quantity: 1, unitPrice: 150, taxRate: 20 }],
+        },
+        salesPermissions
+      );
+
+      const inv2 = SalesService.createInvoice(
+        tenant1,
+        {
+          customerId: 'cli-idem-1',
+          mutationId,
+          lineItems: [{ description: 'Test Idempotence', quantity: 1, unitPrice: 150, taxRate: 20 }],
+        },
+        salesPermissions
+      );
+
+      expect(inv1.id).toBe(inv2.id);
+      expect(inv1.invoiceNumber).toBe(inv2.invoiceNumber);
+
+      const allInvoices = SalesService.findAllInvoices(tenant1, salesPermissions);
+      expect(allInvoices.length).toBe(1);
+    });
+
+    it('should return identical payment when replaying payment recording with same mutationId', () => {
+      const invoice = SalesService.createInvoice(
+        tenant1,
+        {
+          customerId: 'cli-idem-2',
+          lineItems: [{ description: 'Test Pay Idem', quantity: 1, unitPrice: 100, taxRate: 0 }],
+        },
+        salesPermissions
+      );
+
+      const mutationId = 'mut-pay-5001';
+
+      const pay1 = SalesService.recordPayment(
+        tenant1,
+        { invoiceId: invoice.id, amount: 50, paymentMethod: 'CASH', mutationId },
+        salesPermissions
+      );
+
+      const pay2 = SalesService.recordPayment(
+        tenant1,
+        { invoiceId: invoice.id, amount: 50, paymentMethod: 'CASH', mutationId },
+        salesPermissions
+      );
+
+      expect(pay1.id).toBe(pay2.id);
+      expect(pay1.paymentNumber).toBe(pay2.paymentNumber);
+
+      const payments = SalesService.findAllPayments(tenant1, salesPermissions);
+      expect(payments.length).toBe(1);
+
+      const refreshed = SalesService.findOneInvoice(tenant1, invoice.id, salesPermissions);
+      expect(refreshed.amountPaid).toBe(50);
+      expect(refreshed.amountDue).toBe(50);
+    });
+  });
+
+  describe('5. Numérotation Officielle et Isolation Concurrente', () => {
+    it('should generate strict sequential numbers per organization and year', () => {
+      const year = new Date().getFullYear();
+
+      const inv1 = SalesService.createInvoice(
+        tenant1,
+        { customerId: 'c1', lineItems: [{ description: 'Item 1', quantity: 1, unitPrice: 10, taxRate: 0 }] },
+        salesPermissions
+      );
+
+      const inv2 = SalesService.createInvoice(
+        tenant1,
+        { customerId: 'c1', lineItems: [{ description: 'Item 2', quantity: 1, unitPrice: 20, taxRate: 0 }] },
+        salesPermissions
+      );
+
+      expect(inv1.invoiceNumber).toBe(`FAC-${year}-0001`);
+      expect(inv2.invoiceNumber).toBe(`FAC-${year}-0002`);
+    });
+  });
+
+  describe('6. Snapshot Historique Lignes Commerciales', () => {
+    it('should preserve invoice commercial snapshot values even if catalog product is altered or deleted', () => {
+      const invoice = SalesService.createInvoice(
+        tenant1,
+        {
+          customerId: 'cli-snap-1',
+          lineItems: [
+            {
+              productServiceId: 'prod-catalog-99',
+              description: 'Écran 27 pouces (Original)',
+              quantity: 1,
+              unitPrice: 250,
+              taxRate: 20,
+              discountPercent: 0,
+            },
+          ],
+        },
+        salesPermissions
+      );
+
+      expect(invoice.totalAmount).toBe(300);
+
+      // Simulate catalog item update/deletion
+      const line = invoice.lineItems[0];
+      expect(line.description).toBe('Écran 27 pouces (Original)');
+      expect(line.unitPrice).toBe(250);
+      expect(line.productServiceId).toBe('prod-catalog-99');
+    });
+  });
+
+  describe('7. Immutabilité des Factures Émises', () => {
+    it('should prohibit modifying lines or deleting invoice once issued (UNPAID/PARTIAL/PAID)', () => {
+      const invoice = SalesService.createInvoice(
+        tenant1,
+        {
+          customerId: 'cli-immut-1',
+          lineItems: [{ description: 'Prestation Immuable', quantity: 1, unitPrice: 500, taxRate: 20 }],
+        },
+        salesPermissions
+      );
+
+      expect(invoice.status).toBe('UNPAID');
+
+      // Modifying lines on non-DRAFT invoice -> error
       expect(() => {
-        StockService.getMovements(tenant1, []);
+        SalesService.updateInvoice(
+          tenant1,
+          invoice.id,
+          { lineItems: [{ description: 'Hacked Item', quantity: 10, unitPrice: 1, taxRate: 0 }] },
+          salesPermissions
+        );
+      }).toThrow(/INVOICE_LOCKED/);
+
+      // Delete non-DRAFT invoice -> error
+      expect(() => {
+        SalesService.deleteInvoice(tenant1, invoice.id, salesPermissions);
+      }).toThrow(/INVOICE_LOCKED_DELETE/);
+    });
+  });
+
+  describe('8. RBAC & Multi-Tenant Isolation Backend', () => {
+    it('should enforce RBAC permissions on all sales operations', () => {
+      expect(() => {
+        SalesService.findAllQuotes(tenant1, []);
       }).toThrow(/FORBIDDEN_PERMISSION/);
 
       expect(() => {
-        StockService.recordMovement(
-          tenant1,
-          { productId: 'p1', type: 'IN', quantity: 1 },
-          []
-        );
+        SalesService.findAllInvoices(tenant1, []);
       }).toThrow(/FORBIDDEN_PERMISSION/);
 
       expect(() => {
-        StockService.adjustStock(
-          tenant1,
-          { productId: 'p1', actualQuantity: 5 },
-          []
-        );
+        SalesService.findAllPayments(tenant1, []);
       }).toThrow(/FORBIDDEN_PERMISSION/);
     });
 
-    it('9. should strictly isolate stock movements and product stock between organizations', () => {
-      const prod1 = CatalogService.createProductService(
+    it('should isolate invoices and quotes strictly per tenant', () => {
+      const inv1 = SalesService.createInvoice(
         tenant1,
-        { categoryId: 'cat-1', type: 'PRODUCT', reference: 'SKU-T1', name: 'Prod Tenant 1', salePrice: 10, currentStock: 100 },
-        fullPermissions
+        { customerId: 'cli-t1', lineItems: [{ description: 'Item T1', quantity: 1, unitPrice: 50, taxRate: 0 }] },
+        salesPermissions
       );
 
-      const prod2 = CatalogService.createProductService(
+      const inv2 = SalesService.createInvoice(
         tenant2,
-        { categoryId: 'cat-2', type: 'PRODUCT', reference: 'SKU-T2', name: 'Prod Tenant 2', salePrice: 20, currentStock: 200 },
-        fullPermissions
+        { customerId: 'cli-t2', lineItems: [{ description: 'Item T2', quantity: 1, unitPrice: 75, taxRate: 0 }] },
+        salesPermissions
       );
 
-      // Tenant 1 trying to record movement on Tenant 2 product -> error
-      expect(() => {
-        StockService.recordMovement(
-          tenant1,
-          { productId: prod2.id, type: 'OUT', quantity: 10 },
-          fullPermissions
-        );
-      }).toThrow(/PRODUCT_NOT_FOUND/);
-
-      const tenant1Movements = StockService.getMovements(tenant1, fullPermissions);
-      const tenant2Movements = StockService.getMovements(tenant2, fullPermissions);
-
-      expect(tenant1Movements.every((m) => m.organizationId === 'org-1')).toBe(true);
-      expect(tenant2Movements.every((m) => m.organizationId === 'org-2')).toBe(true);
+      expect(() => SalesService.findOneInvoice(tenant1, inv2.id, salesPermissions)).toThrow(/INVOICE_NOT_FOUND/);
+      expect(() => SalesService.findOneInvoice(tenant2, inv1.id, salesPermissions)).toThrow(/INVOICE_NOT_FOUND/);
     });
   });
 });

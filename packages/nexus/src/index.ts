@@ -4,3 +4,4 @@ export * from './suppliers/suppliers.dto';
 export * from './catalog/catalog.dto';
 export * from './sales/sales.dto';
 export * from './stock/stock.dto';
+export * from './purchases/purchases.dto';

@@ -34,7 +34,7 @@ export class CatalogService {
   public static createCategory(tenantContext: TenantContext, dto: CreateCategoryDto, userPermissions: string[]): CategoryDto {
     RolesGuard.enforcePermission(userPermissions, 'nexus:catalog:create');
     const newCat: CategoryDto = {
-      id: `cat-${crypto.randomUUID()}`,
+      id: `cat-${Date.now()}`,
       organizationId: tenantContext.organizationId,
       name: dto.name,
       type: dto.type
@@ -66,7 +66,7 @@ export class CatalogService {
     }
 
     const newItem: ProductServiceDto = {
-      id: `item-${crypto.randomUUID()}`,
+      id: `item-${Date.now()}`,
       organizationId: orgId,
       categoryId: dto.categoryId,
       defaultSupplierId: dto.defaultSupplierId,
