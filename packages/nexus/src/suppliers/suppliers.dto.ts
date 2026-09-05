@@ -1,3 +1,5 @@
+export type SupplierStatus = 'ACTIVE' | 'INACTIVE';
+
 export interface SupplierDto {
   id: string;
   organizationId: string;
@@ -10,6 +12,7 @@ export interface SupplierDto {
   taxNumber?: string;
   balanceDue: number;
   paymentTerms?: string;
+  status: SupplierStatus;
   createdAt: string;
   updatedAt: string;
 }
@@ -23,6 +26,7 @@ export interface CreateSupplierDto {
   address?: string;
   taxNumber?: string;
   paymentTerms?: string;
+  status?: SupplierStatus;
 }
 
 export interface UpdateSupplierDto {
@@ -33,4 +37,5 @@ export interface UpdateSupplierDto {
   address?: string;
   taxNumber?: string;
   paymentTerms?: string;
+  status?: SupplierStatus;
 }

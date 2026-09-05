@@ -31,10 +31,23 @@ export interface LocalProduct {
   minStockAlert: number;
 }
 
+export interface LocalSupplier {
+  id: string;
+  organizationId: string;
+  code: string;
+  name: string;
+  companyName?: string;
+  email?: string;
+  phone?: string;
+  balanceDue: number;
+  status: 'ACTIVE' | 'INACTIVE';
+}
+
 export class NexoraLocalDatabase {
   public syncQueue: LocalSyncQueueItem[] = [];
   public customers: LocalCustomer[] = [];
   public products: LocalProduct[] = [];
+  public suppliers: LocalSupplier[] = [];
 
   public async saveSyncMutation(
     item: Omit<LocalSyncQueueItem, 'clientTimestamp' | 'status'>
@@ -66,6 +79,7 @@ export class NexoraLocalDatabase {
     this.syncQueue = [];
     this.customers = [];
     this.products = [];
+    this.suppliers = [];
   }
 }
 
