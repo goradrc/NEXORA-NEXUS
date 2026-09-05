@@ -43,11 +43,22 @@ export interface LocalSupplier {
   status: 'ACTIVE' | 'INACTIVE';
 }
 
+export interface LocalPurchaseOrder {
+  id: string;
+  organizationId: string;
+  supplierId: string;
+  poNumber: string;
+  status: 'DRAFT' | 'ORDERED' | 'RECEIVED' | 'CANCELLED';
+  totalAmount: number;
+  createdAt: string;
+}
+
 export class NexoraLocalDatabase {
   public syncQueue: LocalSyncQueueItem[] = [];
   public customers: LocalCustomer[] = [];
   public products: LocalProduct[] = [];
   public suppliers: LocalSupplier[] = [];
+  public purchaseOrders: LocalPurchaseOrder[] = [];
 
   public async saveSyncMutation(
     item: Omit<LocalSyncQueueItem, 'clientTimestamp' | 'status'>
@@ -80,6 +91,7 @@ export class NexoraLocalDatabase {
     this.customers = [];
     this.products = [];
     this.suppliers = [];
+    this.purchaseOrders = [];
   }
 }
 
