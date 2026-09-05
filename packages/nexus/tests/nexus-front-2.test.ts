@@ -181,4 +181,46 @@ describe('NEXORA NEXUS — Phase FRONT-2 Test Suite (Clients & Catalogue)', () =
       }).toThrow(/FORBIDDEN_PERMISSION/);
     });
   });
+
+  describe('3. Calculs et Affichage des Prix TTC', () => {
+    const calculateTtc = (salePrice: any, taxRate: any): number => {
+      const ht = typeof salePrice === 'number' && !isNaN(salePrice) ? salePrice : 0;
+      const tax = typeof taxRate === 'number' && !isNaN(taxRate) ? taxRate : 0;
+      return Number((Math.max(0, ht) * (1 + Math.max(0, tax) / 100)).toFixed(2));
+    };
+
+    it('should calculate TTC correctly when HT = 100 and TVA = 20%', () => {
+      expect(calculateTtc(100, 20)).toBe(120);
+    });
+
+    it('should calculate TTC correctly when HT = 100 and TVA = 0%', () => {
+      expect(calculateTtc(100, 0)).toBe(100);
+    });
+
+    it('should recalculate TTC dynamically when taxRate changes', () => {
+      let ht = 200;
+      let tax = 10;
+      expect(calculateTtc(ht, tax)).toBe(220);
+
+      tax = 20; // modification du taux TVA -> recalcul
+      expect(calculateTtc(ht, tax)).toBe(240);
+    });
+
+    it('should recalculate TTC dynamically when salePrice HT changes', () => {
+      let ht = 150;
+      let tax = 20;
+      expect(calculateTtc(ht, tax)).toBe(180);
+
+      ht = 300; // modification du prix HT -> recalcul
+      expect(calculateTtc(ht, tax)).toBe(360);
+    });
+
+    it('should handle empty, negative or invalid inputs gracefully', () => {
+      expect(calculateTtc(undefined, 20)).toBe(0);
+      expect(calculateTtc(null, 20)).toBe(0);
+      expect(calculateTtc('invalid', 20)).toBe(0);
+      expect(calculateTtc(-50, 20)).toBe(0);
+      expect(calculateTtc(100, -10)).toBe(100);
+    });
+  });
 });

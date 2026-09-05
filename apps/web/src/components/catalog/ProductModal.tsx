@@ -69,6 +69,12 @@ export const ProductModal: React.FC<ProductModalProps> = ({
     setErrors({});
   }, [initialData, isOpen, categories]);
 
+  const calculatedTtc = React.useMemo(() => {
+    const ht = typeof formData.salePrice === 'number' && !isNaN(formData.salePrice) ? formData.salePrice : 0;
+    const tax = typeof formData.taxRate === 'number' && !isNaN(formData.taxRate) ? formData.taxRate : 0;
+    return Math.max(0, ht) * (1 + Math.max(0, tax) / 100);
+  }, [formData.salePrice, formData.taxRate]);
+
   if (!isOpen) return null;
 
   const handleChange = (
@@ -388,6 +394,27 @@ export const ProductModal: React.FC<ProductModalProps> = ({
                 }}
               />
             </div>
+          </div>
+
+          {/* Dynamic Calculated TTC Preview */}
+          <div
+            style={{
+              marginBottom: 16,
+              padding: '10px 14px',
+              backgroundColor: '#f0f9ff',
+              borderRadius: 6,
+              border: '1px solid #bae6fd',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+            }}
+          >
+            <span style={{ fontSize: 13, fontWeight: 600, color: '#0369a1' }}>
+              Prix de Vente TTC (Calculé) :
+            </span>
+            <span style={{ fontSize: 16, fontWeight: 800, color: '#0284c7' }}>
+              {calculatedTtc.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+            </span>
           </div>
 
           {formData.type === 'PRODUCT' && (

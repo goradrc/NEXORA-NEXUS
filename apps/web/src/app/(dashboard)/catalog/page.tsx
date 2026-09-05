@@ -589,6 +589,9 @@ export default function CatalogPage() {
                     TVA
                   </th>
                   <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
+                    PRIX TTC
+                  </th>
+                  <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
                     STOCK ACTUEL
                   </th>
                   <th
@@ -647,6 +650,12 @@ export default function CatalogPage() {
                         </td>
                         <td style={{ padding: '14px 16px', color: '#475569' }}>
                           {product.taxRate}%
+                        </td>
+                        <td style={{ padding: '14px 16px', fontWeight: 700, color: '#0284c7' }}>
+                          {(product.salePrice * (1 + (product.taxRate || 0) / 100)).toLocaleString('fr-FR', {
+                            style: 'currency',
+                            currency: 'EUR',
+                          })}
                         </td>
                         <td style={{ padding: '14px 16px' }}>
                           {product.type === 'SERVICE' ? (

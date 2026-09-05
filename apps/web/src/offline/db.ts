@@ -51,11 +51,71 @@ export interface LocalProduct {
   unit: string;
 }
 
+export interface LocalLineItem {
+  id: string;
+  productServiceId: string;
+  quoteId?: string;
+  invoiceId?: string;
+  description: string;
+  quantity: number;
+  unitPrice: number;
+  taxRate: number;
+  discountPercent: number;
+  totalPrice: number;
+}
+
+export interface LocalQuote {
+  id: string;
+  organizationId: string;
+  customerId: string;
+  quoteNumber: string;
+  status: 'DRAFT' | 'SENT' | 'ACCEPTED' | 'REJECTED' | 'CONVERTED';
+  totalUntaxed: number;
+  totalTax: number;
+  totalAmount: number;
+  validUntil: string;
+  createdAt: string;
+  lineItems: LocalLineItem[];
+}
+
+export interface LocalInvoice {
+  id: string;
+  organizationId: string;
+  customerId: string;
+  quoteId?: string;
+  invoiceNumber: string;
+  status: 'DRAFT' | 'UNPAID' | 'PARTIAL' | 'PAID' | 'CANCELLED';
+  totalUntaxed: number;
+  totalTax: number;
+  totalAmount: number;
+  amountPaid: number;
+  amountDue: number;
+  dueDate: string;
+  createdAt: string;
+  lineItems: LocalLineItem[];
+}
+
+export interface LocalPayment {
+  id: string;
+  organizationId: string;
+  customerId: string;
+  invoiceId: string;
+  paymentNumber: string;
+  amount: number;
+  paymentMethod: 'CASH' | 'BANK_TRANSFER' | 'CHECK' | 'MOBILE_MONEY' | 'CARD';
+  referenceCode?: string;
+  paymentDate: string;
+  createdAt: string;
+}
+
 export class NexoraLocalDatabase {
   public syncQueue: LocalSyncQueueItem[] = [];
   public customers: LocalCustomer[] = [];
   public categories: LocalCategory[] = [];
   public products: LocalProduct[] = [];
+  public quotes: LocalQuote[] = [];
+  public invoices: LocalInvoice[] = [];
+  public payments: LocalPayment[] = [];
 
   constructor() {
     // Initial mock data for testing/offline fallback
@@ -132,6 +192,9 @@ export class NexoraLocalDatabase {
     this.customers = [];
     this.categories = [];
     this.products = [];
+    this.quotes = [];
+    this.invoices = [];
+    this.payments = [];
   }
 }
 
