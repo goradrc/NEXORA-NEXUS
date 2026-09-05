@@ -108,6 +108,21 @@ export interface LocalPayment {
   createdAt: string;
 }
 
+export interface LocalStockMovement {
+  id: string;
+  organizationId: string;
+  productId: string;
+  type: 'IN' | 'OUT' | 'ADJUSTMENT_IN' | 'ADJUSTMENT_OUT';
+  quantity: number;
+  unitCost?: number;
+  reason?: string;
+  referenceDocType?: string;
+  referenceDocId?: string;
+  createdBy?: string;
+  createdAt: string;
+  mutationId?: string;
+}
+
 export class NexoraLocalDatabase {
   public syncQueue: LocalSyncQueueItem[] = [];
   public customers: LocalCustomer[] = [];
@@ -116,6 +131,7 @@ export class NexoraLocalDatabase {
   public quotes: LocalQuote[] = [];
   public invoices: LocalInvoice[] = [];
   public payments: LocalPayment[] = [];
+  public stockMovements: LocalStockMovement[] = [];
 
   constructor() {
     // Initial mock data for testing/offline fallback
@@ -159,6 +175,19 @@ export class NexoraLocalDatabase {
         unit: 'PCE',
       },
     ];
+
+    this.stockMovements = [
+      {
+        id: 'mov-001',
+        organizationId: 'org-1',
+        productId: 'prod-001',
+        type: 'IN',
+        quantity: 15,
+        unitCost: 300,
+        reason: 'Stock Initial',
+        createdAt: new Date().toISOString(),
+      },
+    ];
   }
 
   public async saveSyncMutation(
@@ -195,6 +224,7 @@ export class NexoraLocalDatabase {
     this.quotes = [];
     this.invoices = [];
     this.payments = [];
+    this.stockMovements = [];
   }
 }
 

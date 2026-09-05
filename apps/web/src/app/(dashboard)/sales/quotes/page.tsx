@@ -3,34 +3,38 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useAuth } from '../../../../context/AuthContext';
 import { usePermissions } from '../../../../hooks/usePermissions';
-import { localDb, LocalQuote, LocalCustomer, LocalProduct, LocalInvoice } from '../../../../offline/db';
-import { QuoteModal } from '../../../../components/sales/QuoteModal';
+import { localDb, LocalInvoice, LocalCustomer, LocalProduct, LocalPayment } from '../../../../offline/db';
+import { InvoiceModal } from '../../../../components/sales/InvoiceModal';
+import { PaymentModal } from '../../../../components/sales/PaymentModal';
 import { PermissionGuard } from '../../../../components/ui/PermissionGuard';
 
-export default function QuotesPage() {
+export default function InvoicesPage() {
   const { activeOrganization } = useAuth();
   const orgId = activeOrganization?.id || 'org-1';
 
-  const canCreate = usePermissions('nexus:quotes:create');
-  const canUpdate = usePermissions('nexus:quotes:update');
-  const canDelete = usePermissions('nexus:quotes:delete');
-  const canCreateInvoice = usePermissions('nexus:invoices:create');
+  const canCreate = usePermissions('nexus:invoices:create');
+  const canUpdate = usePermissions('nexus:invoices:update');
+  const canDelete = usePermissions('nexus:invoices:delete');
+  const canCreatePayment = usePermissions('nexus:payments:create');
 
-  const [quotes, setQuotes] = useState<LocalQuote[]>([]);
+  const [invoices, setInvoices] = useState<LocalInvoice[]>([]);
   const [customers, setCustomers] = useState<LocalCustomer[]>([]);
   const [products, setProducts] = useState<LocalProduct[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
 
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [editingQuote, setEditingQuote] = useState<LocalQuote | null>(null);
+  const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
+  const [editingInvoice, setEditingInvoice] = useState<LocalInvoice | null>(null);
+
+  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  const [payingInvoice, setPayingInvoice] = useState<LocalInvoice | null>(null);
 
   useEffect(() => {
-    const orgQuotes = localDb.quotes.filter((q) => q.organizationId === orgId);
+    const orgInvoices = localDb.invoices.filter((i) => i.organizationId === orgId);
     const orgCustomers = localDb.customers.filter((c) => c.organizationId === orgId);
     const orgProducts = localDb.products.filter((p) => p.organizationId === orgId);
 
-    setQuotes([...orgQuotes]);
+    setInvoices([...orgInvoices]);
     setCustomers([...orgCustomers]);
     setProducts([...orgProducts]);
   }, [orgId]);
@@ -43,34 +47,44 @@ export default function QuotesPage() {
     return map;
   }, [customers]);
 
-  const filteredQuotes = useMemo(() => {
-    let result = quotes;
+  const filteredInvoices = useMemo(() => {
+    let result = invoices;
 
     if (selectedStatus !== 'ALL') {
-      result = result.filter((q) => q.status === selectedStatus);
+      result = result.filter((i) => i.status === selectedStatus);
     }
 
     const term = searchTerm.toLowerCase().trim();
     if (!term) return result;
 
-    return result.filter((q) => {
-      const cust = customerMap.get(q.customerId);
+    return result.filter((i) => {
+      const cust = customerMap.get(i.customerId);
       const custName = cust ? cust.name.toLowerCase() : '';
-      return q.quoteNumber.toLowerCase().includes(term) || custName.includes(term);
+      return i.invoiceNumber.toLowerCase().includes(term) || custName.includes(term);
     });
-  }, [quotes, selectedStatus, searchTerm, customerMap]);
+  }, [invoices, selectedStatus, searchTerm, customerMap]);
+
+  // Overall financial KPIs
+  const totalInvoiced = useMemo(() => invoices.reduce((sum, i) => sum + i.totalAmount, 0), [invoices]);
+  const totalCollected = useMemo(() => invoices.reduce((sum, i) => sum + (i.amountPaid || 0), 0), [invoices]);
+  const totalReceivables = useMemo(() => invoices.reduce((sum, i) => sum + (i.amountDue || 0), 0), [invoices]);
 
   const handleOpenCreateModal = () => {
-    setEditingQuote(null);
-    setIsModalOpen(true);
+    setEditingInvoice(null);
+    setIsInvoiceModalOpen(true);
   };
 
-  const handleOpenEditModal = (quote: LocalQuote) => {
-    setEditingQuote(quote);
-    setIsModalOpen(true);
+  const handleOpenEditModal = (invoice: LocalInvoice) => {
+    setEditingInvoice(invoice);
+    setIsInvoiceModalOpen(true);
   };
 
-  const handleSaveQuote = async (data: Partial<LocalQuote>) => {
+  const handleOpenPaymentModal = (invoice: LocalInvoice) => {
+    setPayingInvoice(invoice);
+    setIsPaymentModalOpen(true);
+  };
+
+  const handleSaveInvoice = async (data: Partial<LocalInvoice>) => {
     let totalUntaxed = 0;
     let totalTax = 0;
 
@@ -97,157 +111,200 @@ export default function QuotesPage() {
     totalTax = Number(totalTax.toFixed(2));
     const totalAmount = Number((totalUntaxed + totalTax).toFixed(2));
 
-    if (editingQuote) {
-      const updated: LocalQuote = {
-        ...editingQuote,
-        customerId: data.customerId || editingQuote.customerId,
-        status: data.status || editingQuote.status,
-        validUntil: data.validUntil || editingQuote.validUntil,
+    if (editingInvoice) {
+      const isDraft = editingInvoice.status === 'DRAFT';
+      const amountPaid = editingInvoice.amountPaid || 0;
+      const amountDue = Math.max(0, Number((totalAmount - amountPaid).toFixed(2)));
+
+      const updated: LocalInvoice = {
+        ...editingInvoice,
+        customerId: isDraft ? data.customerId || editingInvoice.customerId : editingInvoice.customerId,
+        status: data.status || editingInvoice.status,
+        dueDate: data.dueDate || editingInvoice.dueDate,
         totalUntaxed,
         totalTax,
         totalAmount,
-        lineItems: lines,
+        amountDue,
+        lineItems: isDraft ? lines : editingInvoice.lineItems,
       };
 
-      const idx = localDb.quotes.findIndex((q) => q.id === editingQuote.id && q.organizationId === orgId);
+      const idx = localDb.invoices.findIndex((i) => i.id === editingInvoice.id && i.organizationId === orgId);
       if (idx !== -1) {
-        localDb.quotes[idx] = updated;
+        localDb.invoices[idx] = updated;
       }
 
       await localDb.saveSyncMutation({
         id: crypto.randomUUID(),
         organizationId: orgId,
-        entityType: 'Quote',
+        entityType: 'Invoice',
         entityId: updated.id,
         operation: 'UPDATE',
         payload: updated,
       });
     } else {
-      const count = localDb.quotes.filter((q) => q.organizationId === orgId).length;
-      const quoteNumber = `TEMP-DEV-${(count + 1).toString().padStart(4, '0')}`;
-      const newQuote: LocalQuote = {
-        id: `q-${crypto.randomUUID()}`,
+      const count = localDb.invoices.filter((i) => i.organizationId === orgId).length;
+      const invoiceNumber = `TEMP-FAC-${(count + 1).toString().padStart(4, '0')}`;
+      const newInvoice: LocalInvoice = {
+        id: `inv-${crypto.randomUUID()}`,
         organizationId: orgId,
         customerId: data.customerId || (customers[0]?.id || 'cli-001'),
-        quoteNumber,
-        status: (data.status as any) || 'DRAFT',
+        invoiceNumber,
+        status: (data.status as any) || 'UNPAID',
         totalUntaxed,
         totalTax,
         totalAmount,
-        validUntil: data.validUntil || new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
+        amountPaid: 0,
+        amountDue: totalAmount,
+        dueDate: data.dueDate || new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
         createdAt: new Date().toISOString(),
         lineItems: lines,
       };
 
-      localDb.quotes.push(newQuote);
+      localDb.invoices.push(newInvoice);
+
+      // Update customer balance (increase receivable balance)
+      const custIdx = localDb.customers.findIndex((c) => c.id === newInvoice.customerId);
+      if (custIdx !== -1) {
+        localDb.customers[custIdx].balance = Number(
+          ((localDb.customers[custIdx].balance || 0) + totalAmount).toFixed(2)
+        );
+      }
 
       await localDb.saveSyncMutation({
         id: crypto.randomUUID(),
         organizationId: orgId,
-        entityType: 'Quote',
-        entityId: newQuote.id,
+        entityType: 'Invoice',
+        entityId: newInvoice.id,
         operation: 'INSERT',
-        payload: newQuote,
+        payload: newInvoice,
       });
     }
 
-    const refreshed = localDb.quotes.filter((q) => q.organizationId === orgId);
-    setQuotes([...refreshed]);
-    setIsModalOpen(false);
+    const refreshed = localDb.invoices.filter((i) => i.organizationId === orgId);
+    setInvoices([...refreshed]);
+    setIsInvoiceModalOpen(false);
   };
 
-  const handleConvertQuoteToInvoice = async (quote: LocalQuote) => {
-    if (!confirm(`Voulez-vous convertir le devis ${quote.quoteNumber} en Facture de Vente ?`)) return;
+  const handleSavePayment = async (data: Partial<LocalPayment>) => {
+    if (!payingInvoice) return;
 
-    // Mark Quote CONVERTED
-    quote.status = 'CONVERTED';
-    const qIdx = localDb.quotes.findIndex((q) => q.id === quote.id);
-    if (qIdx !== -1) localDb.quotes[qIdx] = quote;
+    const paymentAmount = Number((data.amount || 0).toFixed(2));
+    if (paymentAmount <= 0) {
+      alert('Le montant du paiement doit être supérieur à 0.');
+      return;
+    }
 
-    // Create Invoice
-    const invCount = localDb.invoices.filter((i) => i.organizationId === orgId).length;
-    const invoiceNumber = `TEMP-FAC-${(invCount + 1).toString().padStart(4, '0')}`;
+    if (paymentAmount > payingInvoice.amountDue + 0.001) {
+      alert(`Sur-paiement rejeté ! Le montant (${paymentAmount} €) dépasse le solde dû (${payingInvoice.amountDue} €).`);
+      return;
+    }
 
-    const newInvoice: LocalInvoice = {
-      id: `inv-${crypto.randomUUID()}`,
-      organizationId: orgId,
-      customerId: quote.customerId,
-      quoteId: quote.id,
-      invoiceNumber,
-      status: 'UNPAID',
-      totalUntaxed: quote.totalUntaxed,
-      totalTax: quote.totalTax,
-      totalAmount: quote.totalAmount,
-      amountPaid: 0,
-      amountDue: quote.totalAmount,
-      dueDate: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString(),
-      createdAt: new Date().toISOString(),
-      lineItems: quote.lineItems.map((l) => ({ ...l, id: `line-${crypto.randomUUID()}` })),
+    const newAmountPaid = Number(((payingInvoice.amountPaid || 0) + paymentAmount).toFixed(2));
+    const newAmountDue = Math.max(0, Number((payingInvoice.totalAmount - newAmountPaid).toFixed(2)));
+    const newStatus = newAmountDue <= 0.001 ? 'PAID' : 'PARTIAL';
+
+    const updatedInvoice: LocalInvoice = {
+      ...payingInvoice,
+      amountPaid: newAmountPaid,
+      amountDue: newAmountDue,
+      status: newStatus,
     };
 
-    localDb.invoices.push(newInvoice);
+    const invIdx = localDb.invoices.findIndex((i) => i.id === payingInvoice.id);
+    if (invIdx !== -1) localDb.invoices[invIdx] = updatedInvoice;
 
-    // Mutations
-    await localDb.saveSyncMutation({
-      id: crypto.randomUUID(),
+    // Create payment
+    const payCount = localDb.payments.filter((p) => p.organizationId === orgId).length;
+    const newPayment: LocalPayment = {
+      id: `pay-${crypto.randomUUID()}`,
       organizationId: orgId,
-      entityType: 'Quote',
-      entityId: quote.id,
-      operation: 'UPDATE',
-      payload: quote,
-    });
+      customerId: payingInvoice.customerId,
+      invoiceId: payingInvoice.id,
+      paymentNumber: `TEMP-PAY-${(payCount + 1).toString().padStart(4, '0')}`,
+      amount: paymentAmount,
+      paymentMethod: data.paymentMethod || 'CASH',
+      referenceCode: data.referenceCode || '',
+      paymentDate: data.paymentDate || new Date().toISOString(),
+      createdAt: new Date().toISOString(),
+    };
+
+    localDb.payments.push(newPayment);
+
+    // Update customer receivable balance
+    const custIdx = localDb.customers.findIndex((c) => c.id === payingInvoice.customerId);
+    if (custIdx !== -1) {
+      localDb.customers[custIdx].balance = Math.max(
+        0,
+        Number(((localDb.customers[custIdx].balance || 0) - paymentAmount).toFixed(2))
+      );
+    }
 
     await localDb.saveSyncMutation({
       id: crypto.randomUUID(),
       organizationId: orgId,
       entityType: 'Invoice',
-      entityId: newInvoice.id,
-      operation: 'INSERT',
-      payload: newInvoice,
+      entityId: updatedInvoice.id,
+      operation: 'UPDATE',
+      payload: updatedInvoice,
     });
-
-    const refreshed = localDb.quotes.filter((q) => q.organizationId === orgId);
-    setQuotes([...refreshed]);
-    alert(`Devis converti avec succès en Facture ${invoiceNumber} !`);
-  };
-
-  const handleDeleteQuote = async (quoteId: string) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce devis ?')) return;
-
-    localDb.quotes = localDb.quotes.filter((q) => !(q.id === quoteId && q.organizationId === orgId));
 
     await localDb.saveSyncMutation({
       id: crypto.randomUUID(),
       organizationId: orgId,
-      entityType: 'Quote',
-      entityId: quoteId,
-      operation: 'DELETE',
-      payload: { id: quoteId },
+      entityType: 'Payment',
+      entityId: newPayment.id,
+      operation: 'INSERT',
+      payload: newPayment,
     });
 
-    const refreshed = localDb.quotes.filter((q) => q.organizationId === orgId);
-    setQuotes([...refreshed]);
+    const refreshed = localDb.invoices.filter((i) => i.organizationId === orgId);
+    setInvoices([...refreshed]);
+    setIsPaymentModalOpen(false);
+  };
+
+  const handleDeleteInvoice = async (invoiceId: string) => {
+    const target = invoices.find((i) => i.id === invoiceId);
+    if (target && target.status !== 'DRAFT') {
+      alert('Seules les factures en statut Brouillon (DRAFT) peuvent être supprimées.');
+      return;
+    }
+
+    if (!confirm('Êtes-vous sûr de vouloir supprimer cette facture brouillon ?')) return;
+
+    localDb.invoices = localDb.invoices.filter((i) => !(i.id === invoiceId && i.organizationId === orgId));
+
+    await localDb.saveSyncMutation({
+      id: crypto.randomUUID(),
+      organizationId: orgId,
+      entityType: 'Invoice',
+      entityId: invoiceId,
+      operation: 'DELETE',
+      payload: { id: invoiceId },
+    });
+
+    const refreshed = localDb.invoices.filter((i) => i.organizationId === orgId);
+    setInvoices([...refreshed]);
   };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'DRAFT':
         return { label: 'Brouillon', bg: '#f1f5f9', color: '#475569' };
-      case 'SENT':
-        return { label: 'Envoyé', bg: '#e0f2fe', color: '#0369a1' };
-      case 'ACCEPTED':
-        return { label: 'Accepté', bg: '#dcfce7', color: '#15803d' };
-      case 'REJECTED':
-        return { label: 'Refusé', bg: '#fef2f2', color: '#dc2626' };
-      case 'CONVERTED':
-        return { label: 'Converti en Facture', bg: '#f3e8ff', color: '#6b21a8' };
+      case 'UNPAID':
+        return { label: 'Non Payée', bg: '#fef2f2', color: '#dc2626' };
+      case 'PARTIAL':
+        return { label: 'Partiellement Payée', bg: '#fef3c7', color: '#b45309' };
+      case 'PAID':
+        return { label: 'Payée', bg: '#dcfce7', color: '#15803d' };
+      case 'CANCELLED':
+        return { label: 'Annulée', bg: '#f3f4f6', color: '#6b7280' };
       default:
         return { label: status, bg: '#f1f5f9', color: '#475569' };
     }
   };
 
   return (
-    <PermissionGuard permission="nexus:quotes:read">
+    <PermissionGuard permission="nexus:invoices:read">
       <div>
         {/* Header */}
         <div
@@ -260,10 +317,11 @@ export default function QuotesPage() {
         >
           <div>
             <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: '#0f172a' }}>
-              Devis & Proformas Commerciales
+              Factures de Vente & Créances
             </h1>
             <p style={{ margin: '4px 0 0 0', fontSize: 14, color: '#64748b' }}>
-              Élaboration, suivi et conversion des devis pour <strong>{activeOrganization?.name || 'Entreprise Active'}</strong>
+              Émission des factures, suivi des règlements et créances pour{' '}
+              <strong>{activeOrganization?.name || 'Entreprise Active'}</strong>
             </p>
           </div>
 
@@ -284,12 +342,43 @@ export default function QuotesPage() {
                 gap: 8,
               }}
             >
-              <span>➕</span> Nouveau Devis
+              <span>➕</span> Nouvelle Facture
             </button>
           )}
         </div>
 
-        {/* Search & Filters */}
+        {/* KPI Summary Cards */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
+            gap: 16,
+            marginBottom: 24,
+          }}
+        >
+          <div style={{ padding: 16, backgroundColor: '#ffffff', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Total Facturé</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', marginTop: 4 }}>
+              {totalInvoiced.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+            </div>
+          </div>
+
+          <div style={{ padding: 16, backgroundColor: '#ffffff', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Montant Encaissé</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#16a34a', marginTop: 4 }}>
+              {totalCollected.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+            </div>
+          </div>
+
+          <div style={{ padding: 16, backgroundColor: '#ffffff', borderRadius: 8, border: '1px solid #e2e8f0' }}>
+            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Reste à Recouvrer</div>
+            <div style={{ fontSize: 22, fontWeight: 800, color: '#d97706', marginTop: 4 }}>
+              {totalReceivables.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+            </div>
+          </div>
+        </div>
+
+        {/* Filters */}
         <div
           style={{
             backgroundColor: '#ffffff',
@@ -304,7 +393,7 @@ export default function QuotesPage() {
         >
           <input
             type="text"
-            placeholder="Rechercher par N° devis ou nom de client..."
+            placeholder="Rechercher par N° facture ou nom de client..."
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             style={{
@@ -330,10 +419,10 @@ export default function QuotesPage() {
           >
             <option value="ALL">Tous les Statuts</option>
             <option value="DRAFT">Brouillons</option>
-            <option value="SENT">Envoyés</option>
-            <option value="ACCEPTED">Acceptés</option>
-            <option value="REJECTED">Refusés</option>
-            <option value="CONVERTED">Convertis</option>
+            <option value="UNPAID">Non Payées</option>
+            <option value="PARTIAL">Partiellement Payées</option>
+            <option value="PAID">Payées</option>
+            <option value="CANCELLED">Annulées</option>
           </select>
         </div>
 
@@ -349,36 +438,35 @@ export default function QuotesPage() {
           <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
             <thead>
               <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>N° DEVIS</th>
+                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>N° FACTURE</th>
                 <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>CLIENT</th>
                 <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>STATUT</th>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>VALIDITÉ</th>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>TOTAL HT</th>
+                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>ÉCHÉANCE</th>
                 <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>TOTAL TTC</th>
+                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>PAYÉ</th>
+                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>RESTE DÛ</th>
                 <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569', textAlign: 'right' }}>ACTIONS</th>
               </tr>
             </thead>
             <tbody>
-              {filteredQuotes.length === 0 ? (
+              {filteredInvoices.length === 0 ? (
                 <tr>
-                  <td colSpan={7} style={{ padding: 32, textAlign: 'center', color: '#94a3b8' }}>
-                    Aucun devis trouvé.
+                  <td colSpan={8} style={{ padding: 32, textAlign: 'center', color: '#94a3b8' }}>
+                    Aucune facture trouvée.
                   </td>
                 </tr>
               ) : (
-                filteredQuotes.map((quote) => {
-                  const cust = customerMap.get(quote.customerId);
-                  const badge = getStatusBadge(quote.status);
+                filteredInvoices.map((invoice) => {
+                  const cust = customerMap.get(invoice.customerId);
+                  const badge = getStatusBadge(invoice.status);
 
                   return (
-                    <tr key={quote.id} style={{ borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
+                    <tr key={invoice.id} style={{ borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
                       <td style={{ padding: '14px 16px', fontWeight: 600, color: '#0f172a' }}>
-                        <code>{quote.quoteNumber}</code>
+                        <code>{invoice.invoiceNumber}</code>
                       </td>
                       <td style={{ padding: '14px 16px' }}>
-                        <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                          {cust ? cust.name : 'Client Inconnu'}
-                        </div>
+                        <div style={{ fontWeight: 600, color: '#0f172a' }}>{cust ? cust.name : 'Client Inconnu'}</div>
                         {cust?.companyName && (
                           <div style={{ fontSize: 12, color: '#64748b' }}>{cust.companyName}</div>
                         )}
@@ -398,37 +486,40 @@ export default function QuotesPage() {
                         </span>
                       </td>
                       <td style={{ padding: '14px 16px', color: '#475569' }}>
-                        {quote.validUntil ? new Date(quote.validUntil).toLocaleDateString('fr-FR') : '—'}
+                        {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('fr-FR') : '—'}
                       </td>
-                      <td style={{ padding: '14px 16px', color: '#475569' }}>
-                        {quote.totalUntaxed.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                      <td style={{ padding: '14px 16px', fontWeight: 700, color: '#0f172a' }}>
+                        {invoice.totalAmount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
                       </td>
-                      <td style={{ padding: '14px 16px', fontWeight: 700, color: '#0284c7' }}>
-                        {quote.totalAmount.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                      <td style={{ padding: '14px 16px', color: '#16a34a', fontWeight: 600 }}>
+                        {invoice.amountPaid.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
+                      </td>
+                      <td style={{ padding: '14px 16px', color: invoice.amountDue > 0 ? '#d97706' : '#16a34a', fontWeight: 700 }}>
+                        {invoice.amountDue.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
                       </td>
                       <td style={{ padding: '14px 16px', textAlign: 'right' }}>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                          {quote.status === 'ACCEPTED' && canCreateInvoice && (
+                          {invoice.amountDue > 0 && canCreatePayment && (
                             <button
-                              onClick={() => handleConvertQuoteToInvoice(quote)}
+                              onClick={() => handleOpenPaymentModal(invoice)}
                               style={{
                                 padding: '6px 10px',
                                 borderRadius: 4,
-                                border: '1px solid #a855f7',
-                                backgroundColor: '#faf5ff',
-                                color: '#7e22ce',
+                                border: '1px solid #16a34a',
+                                backgroundColor: '#f0fdf4',
+                                color: '#15803d',
                                 fontSize: 12,
                                 fontWeight: 700,
                                 cursor: 'pointer',
                               }}
                             >
-                              ⚡ Convertir en Facture
+                              💳 Encaisser
                             </button>
                           )}
 
-                          {canUpdate && quote.status !== 'CONVERTED' && (
+                          {canUpdate && (
                             <button
-                              onClick={() => handleOpenEditModal(quote)}
+                              onClick={() => handleOpenEditModal(invoice)}
                               style={{
                                 padding: '6px 10px',
                                 borderRadius: 4,
@@ -443,9 +534,9 @@ export default function QuotesPage() {
                             </button>
                           )}
 
-                          {canDelete && quote.status !== 'CONVERTED' && (
+                          {canDelete && invoice.status === 'DRAFT' && (
                             <button
-                              onClick={() => handleDeleteQuote(quote.id)}
+                              onClick={() => handleDeleteInvoice(invoice.id)}
                               style={{
                                 padding: '6px 10px',
                                 borderRadius: 4,
@@ -470,14 +561,21 @@ export default function QuotesPage() {
           </table>
         </div>
 
-        {/* Modal */}
-        <QuoteModal
-          isOpen={isModalOpen}
-          onClose={() => setIsModalOpen(false)}
-          onSave={handleSaveQuote}
-          initialData={editingQuote}
+        {/* Modals */}
+        <InvoiceModal
+          isOpen={isInvoiceModalOpen}
+          onClose={() => setIsInvoiceModalOpen(false)}
+          onSave={handleSaveInvoice}
+          initialData={editingInvoice}
           customers={customers}
           products={products}
+        />
+
+        <PaymentModal
+          isOpen={isPaymentModalOpen}
+          onClose={() => setIsPaymentModalOpen(false)}
+          onSave={handleSavePayment}
+          invoice={payingInvoice}
         />
       </div>
     </PermissionGuard>

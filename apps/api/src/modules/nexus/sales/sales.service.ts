@@ -13,6 +13,7 @@ import {
   QuoteStatus,
   InvoiceStatus,
 } from '@nexora/nexus';
+import { StockService } from '../stock/stock.service';
 
 export class SalesService {
   private static documentCounters: Map<string, number> = new Map();
@@ -323,13 +324,15 @@ export class SalesService {
         ? dto.invoiceNumber
         : this.getNextDocumentNumber(orgId, 'FAC');
 
+    const initialStatus: InvoiceStatus = 'UNPAID';
+
     const newInvoice: InvoiceDto = {
       id: `inv-${crypto.randomUUID()}`,
       organizationId: orgId,
       customerId: dto.customerId,
       quoteId: dto.quoteId,
       invoiceNumber: officialNumber,
-      status: 'UNPAID', // Direct emission
+      status: initialStatus, // Direct emission
       totalUntaxed,
       totalTax,
       totalAmount,
@@ -339,6 +342,17 @@ export class SalesService {
       createdAt: new Date().toISOString(),
       lineItems: processedLines,
     };
+
+    // If issued (non-DRAFT), trigger stock OUT for stockable PRODUCT items BEFORE persisting
+    if (initialStatus === 'UNPAID') {
+      StockService.recordInvoiceStockOut(
+        tenantContext,
+        newInvoice.invoiceNumber,
+        newInvoice.lineItems,
+        dto.mutationId,
+        ['nexus:stock:write']
+      );
+    }
 
     this.invoicesStore.push(newInvoice);
     if (dto.mutationId) {
@@ -376,10 +390,23 @@ export class SalesService {
       totalAmount = processed.totalAmount;
     }
 
+    const newStatus = dto.status || existing.status;
+
+    // Trigger stock OUT if invoice transitions from DRAFT -> UNPAID
+    if (existing.status === 'DRAFT' && newStatus === 'UNPAID') {
+      StockService.recordInvoiceStockOut(
+        tenantContext,
+        existing.invoiceNumber,
+        processedLines,
+        undefined,
+        ['nexus:stock:write']
+      );
+    }
+
     const updated: InvoiceDto = {
       ...existing,
       customerId: existing.status === 'DRAFT' ? dto.customerId || existing.customerId : existing.customerId,
-      status: dto.status || existing.status,
+      status: newStatus,
       dueDate: dto.dueDate || existing.dueDate,
       totalUntaxed,
       totalTax,
