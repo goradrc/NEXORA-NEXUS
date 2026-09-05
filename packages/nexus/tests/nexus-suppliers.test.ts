@@ -1,4 +1,5 @@
 import { SuppliersService } from '../../../apps/api/src/modules/nexus/suppliers/suppliers.service';
+import { SuppliersController } from '../../../apps/api/src/modules/nexus/suppliers/suppliers.controller';
 import { CreateSupplierDto, UpdateSupplierDto } from '@nexora/nexus';
 
 describe('NEXORA NEXUS — Suppliers Module Test Suite', () => {
@@ -113,6 +114,29 @@ describe('NEXORA NEXUS — Suppliers Module Test Suite', () => {
       expect(() => {
         SuppliersService.update(tenantOrg1, supplier.id, { name: 'New Name' }, ['nexus:suppliers:read']);
       }).toThrow('FORBIDDEN_PERMISSION');
+    });
+  });
+
+  describe('5. REST SuppliersController Handler', () => {
+    it('should delegate REST controller calls to SuppliersService with tenant context and RBAC', () => {
+      const created = SuppliersController.create(
+        tenantOrg1,
+        { name: 'Controller Supplier', companyName: 'Controller Co' },
+        fullPermissions
+      );
+      expect(created.id).toBeDefined();
+
+      const fetched = SuppliersController.getOne(tenantOrg1, created.id, fullPermissions);
+      expect(fetched.name).toEqual('Controller Supplier');
+
+      const list = SuppliersController.getAll(tenantOrg1, fullPermissions);
+      expect(list.some(s => s.id === created.id)).toBe(true);
+
+      const updated = SuppliersController.update(tenantOrg1, created.id, { name: 'Controller Supplier Updated' }, fullPermissions);
+      expect(updated.name).toEqual('Controller Supplier Updated');
+
+      const toggled = SuppliersController.toggleStatus(tenantOrg1, created.id, 'INACTIVE', fullPermissions);
+      expect(toggled.status).toEqual('INACTIVE');
     });
   });
 });
