@@ -1,7 +1,7 @@
 export interface AuditLogEntry {
   organizationId: string;
   userId?: string;
-  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'LOGOUT';
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'LOGIN' | 'LOGOUT' | string;
   entityName: string;
   entityId: string;
   changes?: Record<string, any>;

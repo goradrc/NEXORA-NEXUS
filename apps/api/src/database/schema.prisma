@@ -48,6 +48,7 @@ model Organization {
   deliveryNotes    DeliveryNote[]
   payments         Payment[]
   expenses         Expense[]
+  inventories      Inventory[]
 
   @@map("organizations")
 }
@@ -68,6 +69,7 @@ model User {
   auditLogs      AuditLog[]
   stockMovements StockMovement[]
   employees      Employee[]
+  inventories    Inventory[]
 
   @@map("users")
 }
@@ -284,6 +286,7 @@ model ProductService {
   defaultSupplier Supplier?       @relation(fields: [defaultSupplierId], references: [id], onDelete: SetNull)
   stockMovements  StockMovement[]
   lineItems       LineItem[]
+  inventoryLines  InventoryLine[]
 
   @@map("products_services")
 }
@@ -439,7 +442,7 @@ enum DeliveryStatus {
 
 model LineItem {
   id               String  @id @default(uuid())
-  productServiceId String  @map("product_service_id")
+  productServiceId String? @map("product_service_id")
   quoteId          String? @map("quote_id")
   invoiceId        String? @map("invoice_id")
   deliveryNoteId   String? @map("delivery_note_id")
@@ -451,7 +454,7 @@ model LineItem {
   discountPercent  Float   @default(0.0) @map("discount_percent")
   totalPrice       Float   @map("total_price")
 
-  productService ProductService @relation(fields: [productServiceId], references: [id])
+  productService ProductService? @relation(fields: [productServiceId], references: [id], onDelete: SetNull)
   quote          Quote?         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   invoice        Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   deliveryNote   DeliveryNote?  @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
@@ -504,4 +507,48 @@ model Expense {
   supplier     Supplier?    @relation(fields: [supplierId], references: [id], onDelete: SetNull)
 
   @@map("expenses")
+}
+
+model Inventory {
+  id              String          @id @default(uuid())
+  organizationId  String          @map("organization_id")
+  inventoryNumber String          @map("inventory_number")
+  status          InventoryStatus @default(DRAFT)
+  notes           String?
+  createdBy       String?         @map("created_by")
+  validatedBy     String?         @map("validated_by")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  validatedAt     DateTime?       @map("validated_at")
+  idempotencyKey  String?         @map("idempotency_key")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?           @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  lines        InventoryLine[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@map("inventories")
+}
+
+enum InventoryStatus {
+  DRAFT
+  IN_PROGRESS
+  VALIDATED
+  CANCELLED
+}
+
+model InventoryLine {
+  id                  String   @id @default(uuid())
+  inventoryId         String   @map("inventory_id")
+  productId           String   @map("product_id")
+  theoreticalQuantity Float    @map("theoretical_quantity")
+  physicalQuantity    Float?   @map("physical_quantity")
+  varianceQuantity    Float?   @map("variance_quantity")
+  unitCost            Float    @default(0.0) @map("unit_cost")
+  varianceValue       Float?   @map("variance_value")
+  reason              String?
+
+  inventory Inventory      @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  product   ProductService @relation(fields: [productId], references: [id])
+
+  @@map("inventory_lines")
 }
