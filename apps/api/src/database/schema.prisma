@@ -36,18 +36,20 @@ model Organization {
   syncQueue   SyncQueue[]
 
   // Nexus Business Modules Isolation
-  customers        Customer[]
-  suppliers        Supplier[]
-  employees        Employee[]
-  categories       Category[]
-  productsServices ProductService[]
-  stockMovements   StockMovement[]
-  purchaseOrders   PurchaseOrder[]
-  quotes           Quote[]
-  invoices         Invoice[]
-  deliveryNotes    DeliveryNote[]
-  payments         Payment[]
-  expenses         Expense[]
+  customers                Customer[]
+  suppliers                Supplier[]
+  employees                Employee[]
+  categories               Category[]
+  productsServices         ProductService[]
+  stockMovements           StockMovement[]
+  purchaseOrders           PurchaseOrder[]
+  purchaseReceipts         PurchaseReceipt[]
+  purchaseReceiptSequences PurchaseReceiptSequence[]
+  quotes                   Quote[]
+  invoices                 Invoice[]
+  deliveryNotes            DeliveryNote[]
+  payments                 Payment[]
+  expenses                 Expense[]
 
   @@map("organizations")
 }
@@ -64,10 +66,11 @@ model User {
   updatedAt    DateTime @updatedAt @map("updated_at")
 
   // Relations
-  memberships    OrganizationUser[]
-  auditLogs      AuditLog[]
-  stockMovements StockMovement[]
-  employees      Employee[]
+  memberships      OrganizationUser[]
+  auditLogs        AuditLog[]
+  stockMovements   StockMovement[]
+  purchaseReceipts PurchaseReceipt[]
+  employees        Employee[]
 
   @@map("users")
 }
@@ -300,21 +303,23 @@ enum CatalogType {
 }
 
 model StockMovement {
-  id              String       @id @default(uuid())
-  organizationId  String       @map("organization_id")
-  productId       String       @map("product_id")
-  type            MovementType
-  quantity        Float
-  unitCost        Float        @map("unit_cost")
-  reason          String?
-  referenceDocType String?     @map("reference_doc_type")
-  referenceDocId   String?     @map("reference_doc_id")
-  createdBy       String?      @map("created_by")
-  createdAt       DateTime     @default(now()) @map("created_at")
+  id                    String   @id @default(uuid())
+  organizationId        String   @map("organization_id")
+  productId             String   @map("product_id")
+  type                  MovementType
+  quantity              Float
+  unitCost              Float    @map("unit_cost")
+  reason                String?
+  referenceDocType      String?  @map("reference_doc_type")
+  referenceDocId        String?  @map("reference_doc_id")
+  purchaseReceiptLineId String?  @unique @map("purchase_receipt_line_id")
+  createdBy             String?  @map("created_by")
+  createdAt             DateTime @default(now()) @map("created_at")
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  product      ProductService @relation(fields: [productId], references: [id], onDelete: Cascade)
-  user         User?          @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product             ProductService       @relation(fields: [productId], references: [id], onDelete: Cascade)
+  user                User?                @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  purchaseReceiptLine PurchaseReceiptLine? @relation(fields: [purchaseReceiptLineId], references: [id], onDelete: SetNull)
 
   @@map("stock_movements")
 }
@@ -338,9 +343,10 @@ model PurchaseOrder {
   expectedDate   DateTime? @map("expected_date")
   createdAt      DateTime @default(now()) @map("created_at")
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  supplier     Supplier     @relation(fields: [supplierId], references: [id])
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplier     Supplier          @relation(fields: [supplierId], references: [id])
   lineItems    LineItem[]
+  receipts     PurchaseReceipt[]
 
   @@map("purchase_orders")
 }
@@ -348,8 +354,58 @@ model PurchaseOrder {
 enum POStatus {
   DRAFT
   ORDERED
+  PARTIALLY_RECEIVED
   RECEIVED
   CANCELLED
+}
+
+model PurchaseReceiptSequence {
+  id             String @id @default(uuid())
+  organizationId String @map("organization_id")
+  year           Int
+  nextNumber     Int    @default(1) @map("next_number")
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, year])
+  @@map("purchase_receipt_sequences")
+}
+
+model PurchaseReceipt {
+  id              String   @id @default(uuid())
+  organizationId String   @map("organization_id")
+  purchaseOrderId String   @map("purchase_order_id")
+  receiptNumber   String   @map("receipt_number")
+  idempotencyKey  String   @map("idempotency_key")
+  receivedAt      DateTime @default(now()) @map("received_at")
+  createdBy       String?  @map("created_by")
+  notes           String?
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  organization  Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  purchaseOrder PurchaseOrder         @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  user          User?                 @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  lines         PurchaseReceiptLine[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@unique([organizationId, receiptNumber])
+  @@index([organizationId, purchaseOrderId])
+  @@map("purchase_receipts")
+}
+
+model PurchaseReceiptLine {
+  id                String @id @default(uuid())
+  purchaseReceiptId String @map("purchase_receipt_id")
+  lineItemId        String @map("line_item_id")
+  quantityReceived  Float  @map("quantity_received")
+
+  receipt       PurchaseReceipt @relation(fields: [purchaseReceiptId], references: [id], onDelete: Cascade)
+  lineItem      LineItem        @relation(fields: [lineItemId], references: [id], onDelete: Cascade)
+  stockMovement StockMovement?
+
+  @@index([purchaseReceiptId])
+  @@index([lineItemId])
+  @@map("purchase_receipt_lines")
 }
 
 model Quote {
@@ -457,11 +513,12 @@ model LineItem {
   discountPercent  Float   @default(0.0) @map("discount_percent")
   totalPrice       Float   @map("total_price")
 
-  productService ProductService @relation(fields: [productServiceId], references: [id])
-  quote          Quote?         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
-  invoice        Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  deliveryNote   DeliveryNote?  @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
-  purchaseOrder  PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productService ProductService        @relation(fields: [productServiceId], references: [id])
+  quote          Quote?                @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  invoice        Invoice?              @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  deliveryNote   DeliveryNote?         @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
+  purchaseOrder  PurchaseOrder?        @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  receiptLines   PurchaseReceiptLine[]
 
   @@map("line_items")
 }

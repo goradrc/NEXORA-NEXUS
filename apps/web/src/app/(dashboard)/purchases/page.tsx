@@ -6,11 +6,13 @@ import {
   SupplierDto,
   ProductServiceDto,
   CreatePurchaseOrderDto,
+  CreatePurchaseReceiptDto,
   POStatus,
 } from '@nexora/nexus';
 import { ApiClient } from '../../../services/api-client';
 import { PermissionGuard } from '../../../components/ui/PermissionGuard';
 import { PurchaseOrderModal } from '../../../components/purchases/PurchaseOrderModal';
+import { PurchaseReceiptModal } from '../../../components/purchases/PurchaseReceiptModal';
 
 const STATUS_CONFIG: Record<
   POStatus,
@@ -18,6 +20,7 @@ const STATUS_CONFIG: Record<
 > = {
   DRAFT: { label: 'Brouillon', bg: '#f1f5f9', color: '#475569', border: '#cbd5e1' },
   ORDERED: { label: 'Commandée', bg: '#e0f2fe', color: '#0369a1', border: '#bae6fd' },
+  PARTIALLY_RECEIVED: { label: 'Part. Réceptionnée', bg: '#fef3c7', color: '#b45309', border: '#fde68a' },
   RECEIVED: { label: 'Réceptionnée', bg: '#dcfce7', color: '#15803d', border: '#bbf7d0' },
   CANCELLED: { label: 'Annulée', bg: '#ffe4e6', color: '#be123c', border: '#fecdd3' },
 };
@@ -53,6 +56,7 @@ const DEFAULT_CATALOG: ProductServiceDto[] = [
     type: 'PRODUCT',
     reference: 'SKU-PO-01',
     name: 'Workstation Laptop',
+    unit: 'PCE',
     salePrice: 1200,
     purchaseCost: 800,
     taxRate: 20,
@@ -66,6 +70,7 @@ const DEFAULT_CATALOG: ProductServiceDto[] = [
     type: 'SERVICE',
     reference: 'SKU-SRV-01',
     name: 'Installation Service',
+    unit: 'PCE',
     salePrice: 150,
     purchaseCost: 100,
     taxRate: 0,
@@ -89,10 +94,14 @@ export default function PurchasesPage() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPO, setEditingPO] = useState<PurchaseOrderDto | null>(null);
 
+  // Receipt Modal state
+  const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
+  const [receiptPO, setReceiptPO] = useState<PurchaseOrderDto | null>(null);
+
   // Confirmation modal state
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
-    action: 'ORDER' | 'RECEIVE' | 'CANCEL' | null;
+    action: 'ORDER' | 'CANCEL' | null;
     po: PurchaseOrderDto | null;
   }>({
     isOpen: false,
@@ -131,7 +140,7 @@ export default function PurchasesPage() {
     fetchData();
   }, []);
 
-  // Save handler
+  // Save handler for Create/Edit PO
   const handleSavePO = async (dto: CreatePurchaseOrderDto) => {
     try {
       if (editingPO) {
@@ -143,7 +152,7 @@ export default function PurchasesPage() {
           }
         );
         if (res.error) {
-          // Fallback update in local state for frontend preview
+          // Fallback update in local state
           setPurchaseOrders((prev) =>
             prev.map((p) => {
               if (p.id !== editingPO.id) return p;
@@ -163,6 +172,8 @@ export default function PurchasesPage() {
                   unitPrice: l.unitPrice,
                   taxRate: l.taxRate ?? 20,
                   totalPrice: untaxed + tax,
+                  quantityReceived: 0,
+                  quantityRemaining: l.quantity,
                 };
               });
               return {
@@ -185,7 +196,7 @@ export default function PurchasesPage() {
           body: dto,
         });
         if (res.error || !res.data) {
-          // Fallback creation in local state for frontend preview
+          // Fallback creation in local state
           let totalUntaxed = 0;
           let totalTax = 0;
           const lines = dto.lineItems.map((l, i) => {
@@ -202,6 +213,8 @@ export default function PurchasesPage() {
               unitPrice: l.unitPrice,
               taxRate: l.taxRate ?? 20,
               totalPrice: untaxed + tax,
+              quantityReceived: 0,
+              quantityRemaining: l.quantity,
             };
           });
 
@@ -230,7 +243,51 @@ export default function PurchasesPage() {
     }
   };
 
-  // Status transitions
+  // Save handler for Purchase Receipt (FRONT-5 2D-C)
+  const handleSaveReceipt = async (dto: CreatePurchaseReceiptDto) => {
+    if (!receiptPO) return;
+    try {
+      const res = await ApiClient.request(`/nexus/purchase-orders/${receiptPO.id}/receipts`, {
+        method: 'POST',
+        body: dto,
+      });
+
+      if (res.error) {
+        // Fallback local update for preview
+        setPurchaseOrders((prev) =>
+          prev.map((p) => {
+            if (p.id !== receiptPO.id) return p;
+            let allReceived = true;
+            const updatedLines = p.lineItems.map((line) => {
+              const reqLine = dto.lines.find((l) => l.lineItemId === line.id);
+              const addQty = reqLine ? reqLine.quantityReceived : 0;
+              const newCumul = (line.quantityReceived ?? 0) + addQty;
+              const newRemaining = Math.max(0, line.quantity - newCumul);
+              if (newRemaining > 0) allReceived = false;
+              return {
+                ...line,
+                quantityReceived: newCumul,
+                quantityRemaining: newRemaining,
+              };
+            });
+            const newStatus: POStatus = allReceived ? 'RECEIVED' : 'PARTIALLY_RECEIVED';
+            return {
+              ...p,
+              status: newStatus,
+              lineItems: updatedLines,
+              receivedAt: newStatus === 'RECEIVED' ? new Date().toISOString() : p.receivedAt,
+              updatedAt: new Date().toISOString(),
+            };
+          })
+        );
+      }
+      await fetchData();
+    } catch (err: any) {
+      throw new Error(err.message || 'Erreur lors de la validation du bon de réception.');
+    }
+  };
+
+  // Status transitions for Order / Cancel
   const handleConfirmAction = async () => {
     if (!confirmModal.po || !confirmModal.action) return;
     const poId = confirmModal.po.id;
@@ -239,7 +296,6 @@ export default function PurchasesPage() {
     try {
       let endpoint = '';
       if (confirmModal.action === 'ORDER') endpoint = `/nexus/purchase-orders/${poId}/mark-ordered`;
-      else if (confirmModal.action === 'RECEIVE') endpoint = `/nexus/purchase-orders/${poId}/receive`;
       else if (confirmModal.action === 'CANCEL') endpoint = `/nexus/purchase-orders/${poId}/cancel`;
 
       const res = await ApiClient.request<PurchaseOrderDto>(endpoint, { method: 'POST' });
@@ -250,12 +306,10 @@ export default function PurchasesPage() {
             if (p.id !== poId) return p;
             let newStatus: POStatus = p.status;
             if (confirmModal.action === 'ORDER') newStatus = 'ORDERED';
-            if (confirmModal.action === 'RECEIVE') newStatus = 'RECEIVED';
             if (confirmModal.action === 'CANCEL') newStatus = 'CANCELLED';
             return {
               ...p,
               status: newStatus,
-              receivedAt: newStatus === 'RECEIVED' ? new Date().toISOString() : p.receivedAt,
               cancelledAt: newStatus === 'CANCELLED' ? new Date().toISOString() : p.cancelledAt,
               updatedAt: new Date().toISOString(),
             };
@@ -291,7 +345,7 @@ export default function PurchasesPage() {
 
   // KPI Calculations
   const totalCount = purchaseOrders.length;
-  const pendingPOs = purchaseOrders.filter((p) => p.status === 'DRAFT' || p.status === 'ORDERED');
+  const pendingPOs = purchaseOrders.filter((p) => p.status === 'DRAFT' || p.status === 'ORDERED' || p.status === 'PARTIALLY_RECEIVED');
   const pendingTotalAmount = pendingPOs.reduce((acc, p) => acc + p.totalAmount, 0);
 
   const receivedPOs = purchaseOrders.filter((p) => p.status === 'RECEIVED');
@@ -318,7 +372,7 @@ export default function PurchasesPage() {
               Commandes d'Achat
             </h1>
             <p style={{ margin: '4px 0 0 0', fontSize: 14, color: '#64748b' }}>
-              Gestion du réapprovisionnement, bons de commande fournisseurs et réceptions de stock.
+              Gestion du réapprovisionnement, bons de commande fournisseurs et réceptions partielles de stock.
             </p>
           </div>
 
@@ -460,6 +514,7 @@ export default function PurchasesPage() {
               { id: 'ALL', label: 'Toutes' },
               { id: 'DRAFT', label: 'Brouillons' },
               { id: 'ORDERED', label: 'Commandées' },
+              { id: 'PARTIALLY_RECEIVED', label: 'Part. Réceptionnées' },
               { id: 'RECEIVED', label: 'Réceptionnées' },
               { id: 'CANCELLED', label: 'Annulées' },
             ].map((tab) => (
@@ -573,7 +628,7 @@ export default function PurchasesPage() {
                     <th style={{ padding: '12px 16px', fontWeight: 700 }}>Code PO</th>
                     <th style={{ padding: '12px 16px', fontWeight: 700 }}>Fournisseur</th>
                     <th style={{ padding: '12px 16px', fontWeight: 700 }}>Date Commande</th>
-                    <th style={{ padding: '12px 16px', fontWeight: 700 }}>Livraison Prévue</th>
+                    <th style={{ padding: '12px 16px', fontWeight: 700 }}>Avancement Réception</th>
                     <th style={{ padding: '12px 16px', fontWeight: 700 }}>Statut</th>
                     <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'right' }}>Total HT</th>
                     <th style={{ padding: '12px 16px', fontWeight: 700, textAlign: 'right' }}>Total TTC</th>
@@ -583,7 +638,11 @@ export default function PurchasesPage() {
                 <tbody>
                   {filteredOrders.map((po) => {
                     const statusCfg = STATUS_CONFIG[po.status];
-                    const isLocked = po.status === 'RECEIVED' || po.status === 'CANCELLED';
+                    const isLocked = po.status === 'PARTIALLY_RECEIVED' || po.status === 'RECEIVED' || po.status === 'CANCELLED';
+
+                    // Compute overall receipt progress
+                    const totalOrderedQty = po.lineItems.reduce((acc, l) => acc + l.quantity, 0);
+                    const totalReceivedQty = po.lineItems.reduce((acc, l) => acc + (l.quantityReceived ?? 0), 0);
 
                     return (
                       <tr key={po.id} style={{ borderBottom: '1px solid #e2e8f0' }}>
@@ -596,8 +655,11 @@ export default function PurchasesPage() {
                         <td style={{ padding: '12px 16px', color: '#64748b' }}>
                           {new Date(po.orderDate).toLocaleDateString('fr-FR')}
                         </td>
-                        <td style={{ padding: '12px 16px', color: '#64748b' }}>
-                          {po.expectedDate ? new Date(po.expectedDate).toLocaleDateString('fr-FR') : '-'}
+                        <td style={{ padding: '12px 16px', color: '#475569', fontSize: 13 }}>
+                          <span style={{ fontWeight: 700, color: totalReceivedQty > 0 ? '#15803d' : '#64748b' }}>
+                            {totalReceivedQty}
+                          </span>{' '}
+                          / {totalOrderedQty} reçus
                         </td>
                         <td style={{ padding: '12px 16px' }}>
                           <span
@@ -668,10 +730,13 @@ export default function PurchasesPage() {
                               </PermissionGuard>
                             )}
 
-                            {(po.status === 'ORDERED' || po.status === 'DRAFT') && (
+                            {(po.status === 'ORDERED' || po.status === 'PARTIALLY_RECEIVED' || po.status === 'DRAFT') && (
                               <PermissionGuard permission="nexus:purchase-orders:update">
                                 <button
-                                  onClick={() => setConfirmModal({ isOpen: true, action: 'RECEIVE', po })}
+                                  onClick={() => {
+                                    setReceiptPO(po);
+                                    setIsReceiptModalOpen(true);
+                                  }}
                                   style={{
                                     padding: '5px 10px',
                                     borderRadius: 4,
@@ -718,13 +783,22 @@ export default function PurchasesPage() {
           </div>
         )}
 
-        {/* Modal for Create/Edit */}
+        {/* Modal for Create/Edit PO */}
         <PurchaseOrderModal
           isOpen={isModalOpen}
           onClose={() => setIsModalOpen(false)}
           onSave={handleSavePO}
           initialData={editingPO}
           suppliers={suppliers}
+          catalogItems={catalogItems}
+        />
+
+        {/* Modal for Partial Receipt (FRONT-5 2D-C) */}
+        <PurchaseReceiptModal
+          isOpen={isReceiptModalOpen}
+          onClose={() => setIsReceiptModalOpen(false)}
+          onSave={handleSaveReceipt}
+          purchaseOrder={receiptPO}
           catalogItems={catalogItems}
         />
 
@@ -757,7 +831,6 @@ export default function PurchasesPage() {
             >
               <h3 style={{ margin: '0 0 12px 0', fontSize: 18, fontWeight: 700, color: '#0f172a' }}>
                 {confirmModal.action === 'ORDER' && 'Passer la commande ?'}
-                {confirmModal.action === 'RECEIVE' && 'Réceptionner la commande ?'}
                 {confirmModal.action === 'CANCEL' && 'Annuler la commande ?'}
               </h3>
 
@@ -766,13 +839,6 @@ export default function PurchasesPage() {
                   <>
                     Voulez-vous passer la commande <strong>{confirmModal.po.poNumber}</strong> à l'état
                     "Commandée" ?
-                  </>
-                )}
-                {confirmModal.action === 'RECEIVE' && (
-                  <>
-                    La réception de la commande <strong>{confirmModal.po.poNumber}</strong> enregistrera un
-                    mouvement d'entrée en stock (<strong>IN</strong>) pour l'ensemble des articles stockables.
-                    Cette opération est définitive.
                   </>
                 )}
                 {confirmModal.action === 'CANCEL' && (
@@ -806,12 +872,7 @@ export default function PurchasesPage() {
                     padding: '8px 18px',
                     borderRadius: 6,
                     border: 'none',
-                    backgroundColor:
-                      confirmModal.action === 'CANCEL'
-                        ? '#dc2626'
-                        : confirmModal.action === 'RECEIVE'
-                        ? '#16a34a'
-                        : '#0284c7',
+                    backgroundColor: confirmModal.action === 'CANCEL' ? '#dc2626' : '#0284c7',
                     color: '#ffffff',
                     fontSize: 14,
                     fontWeight: 600,

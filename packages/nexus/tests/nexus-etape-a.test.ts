@@ -4,6 +4,7 @@ import { usePermissions } from '../../../apps/web/src/hooks/usePermissions';
 describe('NEXORA NEXUS — Étape A Test Suite (Fondations UI & System Layout)', () => {
   beforeEach(() => {
     ApiClient.setAuthToken(null);
+    jest.restoreAllMocks();
   });
 
   describe('1. ApiClient REST Service', () => {
@@ -19,7 +20,10 @@ describe('NEXORA NEXUS — Étape A Test Suite (Fondations UI & System Layout)',
     it('should format requests cleanly and handle network errors in offline state', async () => {
       ApiClient.setAuthToken('test-token-123');
 
-      // Attempting request to invalid local port -> should return offline error response without crashing
+      // Mock network rejection (offline state)
+      jest.spyOn(global, 'fetch').mockRejectedValueOnce(new TypeError('Failed to fetch'));
+
+      // Attempting request -> should return offline error response (status 0) without crashing
       const res = await ApiClient.request('/test-endpoint');
 
       expect(res.status).toEqual(0);

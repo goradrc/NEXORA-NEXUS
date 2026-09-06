@@ -1,5 +1,11 @@
 import { TenantContext } from '@nexora/core';
-import { PurchaseOrderDto, CreatePurchaseOrderDto, UpdatePurchaseOrderDto } from '@nexora/nexus';
+import {
+  PurchaseOrderDto,
+  CreatePurchaseOrderDto,
+  UpdatePurchaseOrderDto,
+  CreatePurchaseReceiptDto,
+  PurchaseReceiptDto,
+} from '@nexora/nexus';
 import { PurchaseOrdersService } from './purchase-orders.service';
 
 export class PurchaseOrdersController {
@@ -21,6 +27,15 @@ export class PurchaseOrdersController {
 
   public static markOrdered(tenantContext: TenantContext, id: string, permissions: string[]): PurchaseOrderDto {
     return PurchaseOrdersService.markOrdered(tenantContext, id, permissions);
+  }
+
+  public static createReceipt(
+    tenantContext: TenantContext,
+    id: string,
+    dto: CreatePurchaseReceiptDto,
+    permissions: string[]
+  ): PurchaseReceiptDto {
+    return PurchaseOrdersService.createReceipt(tenantContext, id, dto, permissions);
   }
 
   public static receive(tenantContext: TenantContext, id: string, permissions: string[]): PurchaseOrderDto {

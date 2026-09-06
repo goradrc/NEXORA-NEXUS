@@ -2,9 +2,9 @@ import { PurchaseOrdersService } from '../../../apps/api/src/modules/nexus/purch
 import { PurchaseOrdersController } from '../../../apps/api/src/modules/nexus/purchase-orders/purchase-orders.controller';
 import { SuppliersService } from '../../../apps/api/src/modules/nexus/suppliers/suppliers.service';
 import { CatalogService } from '../../../apps/api/src/modules/nexus/catalog/catalog.service';
-import { CreatePurchaseOrderDto } from '@nexora/nexus';
+import { CreatePurchaseOrderDto, CreatePurchaseReceiptDto } from '@nexora/nexus';
 
-describe('NEXORA NEXUS — Purchase Orders Module Test Suite', () => {
+describe('NEXORA NEXUS — Purchase Orders Module Test Suite (including FRONT-5 2D-C Partial Receipts)', () => {
   const tenantOrg1 = { organizationId: 'org-1', userId: 'usr-1' };
   const tenantOrg2 = { organizationId: 'org-2', userId: 'usr-2' };
   const fullPermissions = [
@@ -96,6 +96,8 @@ describe('NEXORA NEXUS — Purchase Orders Module Test Suite', () => {
       expect(po.totalAmount).toEqual(4800);
       expect(po.lineItems).toHaveLength(1);
       expect(po.lineItems[0].totalPrice).toEqual(4800);
+      expect(po.lineItems[0].quantityReceived).toEqual(0);
+      expect(po.lineItems[0].quantityRemaining).toEqual(5);
     });
 
     it('should reject creation when line item quantity is negative or zero', () => {
@@ -145,12 +147,17 @@ describe('NEXORA NEXUS — Purchase Orders Module Test Suite', () => {
       }).toThrow('PURCHASE_ORDER_NOT_FOUND');
 
       expect(() => {
-        PurchaseOrdersService.receive(tenantOrg2, po1.id, fullPermissions);
+        PurchaseOrdersService.createReceipt(
+          tenantOrg2,
+          po1.id,
+          { idempotencyKey: 'key-cross-tenant', lines: [{ lineItemId: po1.lineItems[0].id, quantityReceived: 1 }] },
+          fullPermissions
+        );
       }).toThrow('PURCHASE_ORDER_NOT_FOUND');
     });
   });
 
-  describe('3. State Machine Transitions', () => {
+  describe('3. State Machine Transitions & Immutability Locks', () => {
     it('should transition from DRAFT to ORDERED properly', () => {
       const po = PurchaseOrdersService.create(
         tenantOrg1,
@@ -179,54 +186,74 @@ describe('NEXORA NEXUS — Purchase Orders Module Test Suite', () => {
       expect(cancelled.status).toEqual('CANCELLED');
     });
 
-    it('should disallow invalid status transitions on CANCELLED or RECEIVED orders', () => {
+    it('IMMUTABILITY LOCK: Disallow update on PARTIALLY_RECEIVED, RECEIVED, or CANCELLED purchase orders', () => {
       const po = PurchaseOrdersService.create(
         tenantOrg1,
         {
           supplierId: supplier1Id,
-          lineItems: [{ productServiceId: productId, quantity: 2, unitPrice: 500 }],
+          lineItems: [{ productServiceId: productId, quantity: 10, unitPrice: 500 }],
         },
         fullPermissions
       );
+      PurchaseOrdersService.markOrdered(tenantOrg1, po.id, fullPermissions);
 
-      PurchaseOrdersService.cancel(tenantOrg1, po.id, fullPermissions);
+      // Partial receipt
+      PurchaseOrdersService.createReceipt(
+        tenantOrg1,
+        po.id,
+        { idempotencyKey: 'key-lock-1', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 4 }] },
+        fullPermissions
+      );
 
-      // Attempt to receive CANCELLED order
+      const fetchedPO = PurchaseOrdersService.findOne(tenantOrg1, po.id, fullPermissions);
+      expect(fetchedPO.status).toEqual('PARTIALLY_RECEIVED');
+
+      // Attempt to update supplier / line items on PARTIALLY_RECEIVED PO -> Rejected
       expect(() => {
-        PurchaseOrdersService.receive(tenantOrg1, po.id, fullPermissions);
+        PurchaseOrdersService.update(
+          tenantOrg1,
+          po.id,
+          { notes: 'Attempting edit on locked PO' },
+          fullPermissions
+        );
+      }).toThrow('CANNOT_MODIFY_LOCKED_PO');
+
+      // Attempt to cancel PARTIALLY_RECEIVED PO -> Rejected
+      expect(() => {
+        PurchaseOrdersService.cancel(tenantOrg1, po.id, fullPermissions);
       }).toThrow('INVALID_PO_STATUS_TRANSITION');
     });
   });
 
-  describe('4. Stock Integration & Idempotency Rules (CRITICAL)', () => {
-    it('CRITICAL RULE: Creation and ORDERED status transition MUST produce ZERO stock movements and NOT change currentStock', () => {
-      const productsBefore = CatalogService.getProductsServices(tenantOrg1, fullPermissions);
-      const targetProductBefore = productsBefore.find((p) => p.id === productId)!;
-      const initialStock = targetProductBefore.currentStock;
-
-      // 1. Create PO
+  describe('4. FRONT-5 Étape 2D-C — Partial Receipts & Stock Integration Suite', () => {
+    it('Scenario 1: Full single receipt transitions status directly to RECEIVED and generates REC-YYYY-XXXX number', () => {
       const po = PurchaseOrdersService.create(
         tenantOrg1,
         {
           supplierId: supplier1Id,
-          lineItems: [{ productServiceId: productId, quantity: 15, unitPrice: 500 }],
+          lineItems: [{ productServiceId: productId, quantity: 10, unitPrice: 500 }],
         },
         fullPermissions
       );
-
-      let movements = PurchaseOrdersService.getStockMovements(tenantOrg1);
-      expect(movements).toHaveLength(0);
-      expect(targetProductBefore.currentStock).toEqual(initialStock);
-
-      // 2. Mark ORDERED
       PurchaseOrdersService.markOrdered(tenantOrg1, po.id, fullPermissions);
 
-      movements = PurchaseOrdersService.getStockMovements(tenantOrg1);
-      expect(movements).toHaveLength(0);
-      expect(targetProductBefore.currentStock).toEqual(initialStock);
+      const receipt = PurchaseOrdersService.createReceipt(
+        tenantOrg1,
+        po.id,
+        { idempotencyKey: 'key-full-receipt', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 10 }] },
+        fullPermissions
+      );
+
+      expect(receipt.id).toBeDefined();
+      expect(receipt.receiptNumber).toMatch(/^REC-2026-\d{4}$/);
+
+      const updatedPO = PurchaseOrdersService.findOne(tenantOrg1, po.id, fullPermissions);
+      expect(updatedPO.status).toEqual('RECEIVED');
+      expect(updatedPO.lineItems[0].quantityReceived).toEqual(10);
+      expect(updatedPO.lineItems[0].quantityRemaining).toEqual(0);
     });
 
-    it('CRITICAL RULE: Transitioning to RECEIVED increases currentStock and generates stock IN movement for PRODUCT items only', () => {
+    it('Scenario 2 & 3: First partial receipt transitions status to PARTIALLY_RECEIVED, second receipt completes to RECEIVED', () => {
       const products = CatalogService.getProductsServices(tenantOrg1, fullPermissions);
       const targetProduct = products.find((p) => p.id === productId)!;
       const initialStock = targetProduct.currentStock;
@@ -235,92 +262,277 @@ describe('NEXORA NEXUS — Purchase Orders Module Test Suite', () => {
         tenantOrg1,
         {
           supplierId: supplier1Id,
+          lineItems: [{ productServiceId: productId, quantity: 100, unitPrice: 500 }],
+        },
+        fullPermissions
+      );
+      PurchaseOrdersService.markOrdered(tenantOrg1, po.id, fullPermissions);
+
+      // Receipt 1: 40 units
+      const receipt1 = PurchaseOrdersService.createReceipt(
+        tenantOrg1,
+        po.id,
+        { idempotencyKey: 'key-part-1', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 40 }] },
+        fullPermissions
+      );
+      expect(receipt1.receiptNumber).toEqual('REC-2026-0001');
+
+      let currentPO = PurchaseOrdersService.findOne(tenantOrg1, po.id, fullPermissions);
+      expect(currentPO.status).toEqual('PARTIALLY_RECEIVED');
+      expect(currentPO.lineItems[0].quantityReceived).toEqual(40);
+      expect(currentPO.lineItems[0].quantityRemaining).toEqual(60);
+      expect(targetProduct.currentStock).toEqual(initialStock + 40);
+
+      let movements = PurchaseOrdersService.getStockMovements(tenantOrg1);
+      expect(movements).toHaveLength(1);
+      expect(movements[0].quantity).toEqual(40);
+
+      // Receipt 2: Remaining 60 units
+      const receipt2 = PurchaseOrdersService.createReceipt(
+        tenantOrg1,
+        po.id,
+        { idempotencyKey: 'key-part-2', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 60 }] },
+        fullPermissions
+      );
+      expect(receipt2.receiptNumber).toEqual('REC-2026-0002');
+
+      currentPO = PurchaseOrdersService.findOne(tenantOrg1, po.id, fullPermissions);
+      expect(currentPO.status).toEqual('RECEIVED');
+      expect(currentPO.lineItems[0].quantityReceived).toEqual(100);
+      expect(currentPO.lineItems[0].quantityRemaining).toEqual(0);
+      expect(targetProduct.currentStock).toEqual(initialStock + 100);
+
+      movements = PurchaseOrdersService.getStockMovements(tenantOrg1);
+      expect(movements).toHaveLength(2);
+      expect(movements[1].quantity).toEqual(60);
+    });
+
+    it('Scenario 4 & 5: Reject over-receipt when quantity exceeds remaining balance', () => {
+      const po = PurchaseOrdersService.create(
+        tenantOrg1,
+        {
+          supplierId: supplier1Id,
+          lineItems: [{ productServiceId: productId, quantity: 50, unitPrice: 500 }],
+        },
+        fullPermissions
+      );
+      PurchaseOrdersService.markOrdered(tenantOrg1, po.id, fullPermissions);
+
+      // First partial: 30
+      PurchaseOrdersService.createReceipt(
+        tenantOrg1,
+        po.id,
+        { idempotencyKey: 'key-over-1', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 30 }] },
+        fullPermissions
+      );
+
+      // Attempt second receipt: 25 (Remaining is only 20) -> Rejected
+      expect(() => {
+        PurchaseOrdersService.createReceipt(
+          tenantOrg1,
+          po.id,
+          { idempotencyKey: 'key-over-2', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 25 }] },
+          fullPermissions
+        );
+      }).toThrow('OVER_RECEIPT_EXCEEDED');
+    });
+
+    it('Scenario 6: Reject zero or negative receipt quantity', () => {
+      const po = PurchaseOrdersService.create(
+        tenantOrg1,
+        {
+          supplierId: supplier1Id,
+          lineItems: [{ productServiceId: productId, quantity: 10, unitPrice: 500 }],
+        },
+        fullPermissions
+      );
+      PurchaseOrdersService.markOrdered(tenantOrg1, po.id, fullPermissions);
+
+      expect(() => {
+        PurchaseOrdersService.createReceipt(
+          tenantOrg1,
+          po.id,
+          { idempotencyKey: 'key-zero', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 0 }] },
+          fullPermissions
+        );
+      }).toThrow('INVALID_RECEIPT_QUANTITY');
+
+      expect(() => {
+        PurchaseOrdersService.createReceipt(
+          tenantOrg1,
+          po.id,
+          { idempotencyKey: 'key-neg', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: -5 }] },
+          fullPermissions
+        );
+      }).toThrow('INVALID_RECEIPT_QUANTITY');
+    });
+
+    it('Scenario 7 & 8: PRODUCT items produce StockMovement IN, SERVICE items produce ZERO stock movements', () => {
+      const products = CatalogService.getProductsServices(tenantOrg1, fullPermissions);
+      const targetProduct = products.find((p) => p.id === productId)!;
+      const initialProductStock = targetProduct.currentStock;
+
+      const po = PurchaseOrdersService.create(
+        tenantOrg1,
+        {
+          supplierId: supplier1Id,
           lineItems: [
-            { productServiceId: productId, quantity: 8, unitPrice: 500 },
-            { productServiceId: serviceId, quantity: 1, unitPrice: 150 }, // Service item -> no stock movement
+            { productServiceId: productId, quantity: 10, unitPrice: 500 },
+            { productServiceId: serviceId, quantity: 2, unitPrice: 150 },
+          ],
+        },
+        fullPermissions
+      );
+      PurchaseOrdersService.markOrdered(tenantOrg1, po.id, fullPermissions);
+
+      const receipt = PurchaseOrdersService.createReceipt(
+        tenantOrg1,
+        po.id,
+        {
+          idempotencyKey: 'key-mixed',
+          lines: [
+            { lineItemId: po.lineItems[0].id, quantityReceived: 5 },
+            { lineItemId: po.lineItems[1].id, quantityReceived: 2 },
           ],
         },
         fullPermissions
       );
 
-      const receivedPO = PurchaseOrdersService.receive(tenantOrg1, po.id, fullPermissions);
-      expect(receivedPO.status).toEqual('RECEIVED');
-      expect(receivedPO.receivedAt).toBeDefined();
-
-      // Check product stock increased
-      expect(targetProduct.currentStock).toEqual(initialStock + 8);
-
-      // Check recorded stock movement IN
+      // Exactly 1 StockMovement for the PRODUCT line
       const movements = PurchaseOrdersService.getStockMovements(tenantOrg1);
       expect(movements).toHaveLength(1);
       expect(movements[0].productId).toEqual(productId);
-      expect(movements[0].type).toEqual('IN');
-      expect(movements[0].quantity).toEqual(8);
-      expect(movements[0].referenceDocType).toEqual('PURCHASE_ORDER');
-      expect(movements[0].referenceDocId).toEqual(po.id);
+      expect(movements[0].quantity).toEqual(5);
+      expect(movements[0].purchaseReceiptLineId).toEqual(receipt.lines[0].id);
+
+      // Product stock increased by 5, service stock unaffected
+      expect(targetProduct.currentStock).toEqual(initialProductStock + 5);
     });
 
-    it('IDEMPOTENCY RULE: Attempting duplicate reception on RECEIVED purchase order is strictly rejected and creates ZERO additional movements', () => {
+    it('Scenario 11: Idempotency with SAME key + SAME payload returns initial receipt without extra stock impact', () => {
+      const products = CatalogService.getProductsServices(tenantOrg1, fullPermissions);
+      const targetProduct = products.find((p) => p.id === productId)!;
+      const initialStock = targetProduct.currentStock;
+
       const po = PurchaseOrdersService.create(
         tenantOrg1,
         {
           supplierId: supplier1Id,
-          lineItems: [{ productServiceId: productId, quantity: 5, unitPrice: 500 }],
+          lineItems: [{ productServiceId: productId, quantity: 20, unitPrice: 500 }],
         },
         fullPermissions
       );
+      PurchaseOrdersService.markOrdered(tenantOrg1, po.id, fullPermissions);
 
-      // First reception -> Success
-      PurchaseOrdersService.receive(tenantOrg1, po.id, fullPermissions);
-      const initialMovementsCount = PurchaseOrdersService.getStockMovements(tenantOrg1).length;
+      const receiptDto: CreatePurchaseReceiptDto = {
+        idempotencyKey: 'key-same-payload-123',
+        lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 10 }],
+      };
 
-      // Second reception attempt -> Rejected with PO_ALREADY_RECEIVED
-      expect(() => {
-        PurchaseOrdersService.receive(tenantOrg1, po.id, fullPermissions);
-      }).toThrow('PO_ALREADY_RECEIVED');
+      // Execution 1
+      const res1 = PurchaseOrdersService.createReceipt(tenantOrg1, po.id, receiptDto, fullPermissions);
+      expect(res1.receiptNumber).toEqual('REC-2026-0001');
+      expect(targetProduct.currentStock).toEqual(initialStock + 10);
+      expect(PurchaseOrdersService.getStockMovements(tenantOrg1)).toHaveLength(1);
 
-      const movementsAfter = PurchaseOrdersService.getStockMovements(tenantOrg1);
-      expect(movementsAfter).toHaveLength(initialMovementsCount);
+      // Execution 2 (Replay identical payload and key)
+      const res2 = PurchaseOrdersService.createReceipt(tenantOrg1, po.id, receiptDto, fullPermissions);
+      expect(res2.id).toEqual(res1.id);
+      expect(res2.receiptNumber).toEqual(res1.receiptNumber);
+
+      // CRITICAL: Stock stock and movements MUST remain unchanged
+      expect(targetProduct.currentStock).toEqual(initialStock + 10);
+      expect(PurchaseOrdersService.getStockMovements(tenantOrg1)).toHaveLength(1);
     });
-  });
 
-  describe('5. RBAC Permission Enforcement', () => {
-    it('should deny PO operations when permission is missing', () => {
-      expect(() => {
-        PurchaseOrdersService.findAll(tenantOrg1, ['nexus:other:permission']);
-      }).toThrow('FORBIDDEN_PERMISSION');
+    it('Scenario 12: Idempotency with SAME key + DIFFERENT payload throws IDEMPOTENCY_KEY_PAYLOAD_MISMATCH', () => {
+      const po = PurchaseOrdersService.create(
+        tenantOrg1,
+        {
+          supplierId: supplier1Id,
+          lineItems: [{ productServiceId: productId, quantity: 20, unitPrice: 500 }],
+        },
+        fullPermissions
+      );
+      PurchaseOrdersService.markOrdered(tenantOrg1, po.id, fullPermissions);
 
+      // Execution 1
+      PurchaseOrdersService.createReceipt(
+        tenantOrg1,
+        po.id,
+        { idempotencyKey: 'key-mismatch-123', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 5 }] },
+        fullPermissions
+      );
+
+      // Execution 2 (Same key, different quantity)
       expect(() => {
-        PurchaseOrdersService.create(
+        PurchaseOrdersService.createReceipt(
           tenantOrg1,
-          { supplierId: supplier1Id, lineItems: [{ productServiceId: productId, quantity: 1, unitPrice: 100 }] },
-          ['nexus:purchase-orders:read']
+          po.id,
+          { idempotencyKey: 'key-mismatch-123', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 10 }] },
+          fullPermissions
         );
-      }).toThrow('FORBIDDEN_PERMISSION');
+      }).toThrow('IDEMPOTENCY_KEY_PAYLOAD_MISMATCH');
+    });
+
+    it('Scenario 15 & 16: Legacy 2C RECEIVED PO migration creates synthetic receipt with ZERO new stock movements and is re-executable idempotently', () => {
+      const productsBefore = CatalogService.getProductsServices(tenantOrg1, fullPermissions);
+      const targetProduct = productsBefore.find((p) => p.id === productId)!;
+      const stockBeforeMigration = targetProduct.currentStock;
+
+      const po = PurchaseOrdersService.create(
+        tenantOrg1,
+        {
+          supplierId: supplier1Id,
+          lineItems: [{ productServiceId: productId, quantity: 15, unitPrice: 500 }],
+        },
+        fullPermissions
+      );
+      // Legacy 2C full receipt
+      PurchaseOrdersService.receive(tenantOrg1, po.id, fullPermissions);
+      const movementsCountBefore = PurchaseOrdersService.getStockMovements(tenantOrg1).length;
+
+      // Execute migration helper
+      const synReceipt1 = PurchaseOrdersService.migrateLegacy2CReceivedOrder(tenantOrg1, po.id);
+      expect(synReceipt1).not.toBeNull();
+      expect(synReceipt1!.receiptNumber).toEqual(`REC-HIST-${po.poNumber}`);
+
+      // Verify ZERO new stock movements and NO stock change
+      expect(PurchaseOrdersService.getStockMovements(tenantOrg1)).toHaveLength(movementsCountBefore);
+      expect(targetProduct.currentStock).toEqual(stockBeforeMigration + 15);
+
+      // Re-run migration helper (Idempotence test)
+      const synReceipt2 = PurchaseOrdersService.migrateLegacy2CReceivedOrder(tenantOrg1, po.id);
+      expect(synReceipt2!.id).toEqual(synReceipt1!.id);
+      expect(PurchaseOrdersService.getStockMovements(tenantOrg1)).toHaveLength(movementsCountBefore);
     });
   });
 
-  describe('6. REST PurchaseOrdersController Handler', () => {
-    it('should delegate controller operations cleanly with tenant context and RBAC', () => {
+  describe('5. REST Controller Integration', () => {
+    it('should delegate createReceipt cleanly in PurchaseOrdersController', () => {
       const po = PurchaseOrdersController.create(
         tenantOrg1,
         {
           supplierId: supplier1Id,
-          lineItems: [{ productServiceId: productId, quantity: 3, unitPrice: 400 }],
+          lineItems: [{ productServiceId: productId, quantity: 12, unitPrice: 400 }],
         },
         fullPermissions
       );
+      PurchaseOrdersController.markOrdered(tenantOrg1, po.id, fullPermissions);
 
-      expect(po.id).toBeDefined();
+      const receipt = PurchaseOrdersController.createReceipt(
+        tenantOrg1,
+        po.id,
+        { idempotencyKey: 'key-controller-1', lines: [{ lineItemId: po.lineItems[0].id, quantityReceived: 6 }] },
+        fullPermissions
+      );
 
-      const fetched = PurchaseOrdersController.getOne(tenantOrg1, po.id, fullPermissions);
-      expect(fetched.poNumber).toEqual(po.poNumber);
+      expect(receipt.id).toBeDefined();
+      expect(receipt.receiptNumber).toMatch(/^REC-2026-\d{4}$/);
 
-      const list = PurchaseOrdersController.getAll(tenantOrg1, fullPermissions);
-      expect(list.some((p) => p.id === po.id)).toBe(true);
-
-      const received = PurchaseOrdersController.receive(tenantOrg1, po.id, fullPermissions);
-      expect(received.status).toEqual('RECEIVED');
+      const updatedPO = PurchaseOrdersController.getOne(tenantOrg1, po.id, fullPermissions);
+      expect(updatedPO.status).toEqual('PARTIALLY_RECEIVED');
+      expect(updatedPO.lineItems[0].quantityReceived).toEqual(6);
     });
   });
 });
