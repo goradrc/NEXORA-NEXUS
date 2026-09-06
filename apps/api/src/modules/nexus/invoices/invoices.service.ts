@@ -212,6 +212,26 @@ export class InvoicesService {
         { balance: Math.max(0, SalesFinancialService.round2(customer.balance - remainingUnpaid)) },
         userPermissions
       );
+
+      // If invoice directly deducted stock, restore stock via IN movements
+      const directStockDeducted = StockService.hasDocumentStockOut(tenantContext, 'INVOICE', existing.id);
+      if (directStockDeducted) {
+        for (const line of existing.lineItems) {
+          if (line.productServiceId) {
+            StockService.recordInMovement(
+              tenantContext,
+              {
+                productId: line.productServiceId,
+                quantity: line.quantity,
+                referenceDocType: 'INVOICE_CANCELLATION',
+                referenceDocId: existing.id,
+                reason: `Stock restored upon cancellation of invoice #${existing.invoiceNumber}`,
+              },
+              userPermissions
+            );
+          }
+        }
+      }
     }
 
     existing.status = 'CANCELLED';

@@ -358,6 +358,107 @@ describe('NEXORA NEXUS — Sales Domain Test Suite (Lot 1 + Lot 2)', () => {
       expect(productA.currentStock).toEqual(7);
       expect(StockService.getMovements(tenantA, fullPermissions)).toHaveLength(1);
     });
+
+    it('should restore stock via IN movement when a direct standalone invoice is cancelled', () => {
+      const invoice = InvoicesService.create(
+        tenantA,
+        {
+          customerId: customerA.id,
+          dueDate: '2025-12-31',
+          lineItems: [
+            { productServiceId: productA.id, description: productA.name, quantity: 4, unitPrice: 1000 },
+          ],
+        },
+        fullPermissions
+      );
+
+      InvoicesService.issueInvoice(tenantA, invoice.id, fullPermissions);
+      expect(productA.currentStock).toEqual(6); // 10 - 4
+
+      // Cancel direct invoice
+      InvoicesService.cancelInvoice(tenantA, invoice.id, 'Customer cancellation', fullPermissions);
+
+      // Stock restored to 10
+      expect(productA.currentStock).toEqual(10);
+      const movements = StockService.getMovements(tenantA, fullPermissions);
+      expect(movements).toHaveLength(2); // 1 OUT, 1 IN
+      expect(movements[1].type).toEqual('IN');
+      expect(movements[1].quantity).toEqual(4);
+    });
+
+    it('should NOT touch stock when an invoice linked to a delivered BL is cancelled', () => {
+      const bl = DeliveryNotesService.create(
+        tenantA,
+        {
+          customerId: customerA.id,
+          lineItems: [
+            { productServiceId: productA.id, description: productA.name, quantity: 3, unitPrice: 1000 },
+          ],
+        },
+        fullPermissions
+      );
+
+      DeliveryNotesService.markDelivered(tenantA, bl.id, fullPermissions);
+      expect(productA.currentStock).toEqual(7);
+
+      const invoice = InvoicesService.create(
+        tenantA,
+        {
+          customerId: customerA.id,
+          dueDate: '2025-12-31',
+          deliveryNoteIds: [bl.id],
+          lineItems: [
+            { productServiceId: productA.id, description: productA.name, quantity: 3, unitPrice: 1000 },
+          ],
+        },
+        fullPermissions
+      );
+
+      InvoicesService.issueInvoice(tenantA, invoice.id, fullPermissions);
+      expect(productA.currentStock).toEqual(7);
+
+      // Cancel invoice linked to delivered BL
+      InvoicesService.cancelInvoice(tenantA, invoice.id, 'Billing error', fullPermissions);
+
+      // Stock remains 7 because BL was delivered
+      expect(productA.currentStock).toEqual(7);
+      expect(StockService.getMovements(tenantA, fullPermissions)).toHaveLength(1); // Only initial BL OUT
+    });
+
+    it('should handle concurrent stock OUT requests atomically and reject requests exceeding stock', async () => {
+      // productA currentStock = 10. Run 3 concurrent requests of 4 units each (total 12 requested).
+      // Exactly 2 requests should succeed (8 units deducted), and 1 should fail with INSUFFICIENT_STOCK_ERROR.
+      const results = await Promise.allSettled([
+        Promise.resolve().then(() =>
+          StockService.recordOutMovement(
+            tenantA,
+            { productId: productA.id, quantity: 4, referenceDocType: 'TEST', referenceDocId: 't1' },
+            fullPermissions
+          )
+        ),
+        Promise.resolve().then(() =>
+          StockService.recordOutMovement(
+            tenantA,
+            { productId: productA.id, quantity: 4, referenceDocType: 'TEST', referenceDocId: 't2' },
+            fullPermissions
+          )
+        ),
+        Promise.resolve().then(() =>
+          StockService.recordOutMovement(
+            tenantA,
+            { productId: productA.id, quantity: 4, referenceDocType: 'TEST', referenceDocId: 't3' },
+            fullPermissions
+          )
+        ),
+      ]);
+
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+
+      expect(fulfilled).toHaveLength(2);
+      expect(rejected).toHaveLength(1);
+      expect(productA.currentStock).toEqual(2); // 10 - 8 = 2
+    });
   });
 
   describe('5. Payments Service & Customer Balance', () => {
