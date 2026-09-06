@@ -439,7 +439,7 @@ enum DeliveryStatus {
 
 model LineItem {
   id               String  @id @default(uuid())
-  productServiceId String  @map("product_service_id")
+  productServiceId String? @map("product_service_id")
   quoteId          String? @map("quote_id")
   invoiceId        String? @map("invoice_id")
   deliveryNoteId   String? @map("delivery_note_id")
@@ -451,7 +451,7 @@ model LineItem {
   discountPercent  Float   @default(0.0) @map("discount_percent")
   totalPrice       Float   @map("total_price")
 
-  productService ProductService @relation(fields: [productServiceId], references: [id])
+  productService ProductService? @relation(fields: [productServiceId], references: [id], onDelete: SetNull)
   quote          Quote?         @relation(fields: [quoteId], references: [id], onDelete: Cascade)
   invoice        Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
   deliveryNote   DeliveryNote?  @relation(fields: [deliveryNoteId], references: [id], onDelete: Cascade)
