@@ -48,6 +48,7 @@ model Organization {
   deliveryNotes    DeliveryNote[]
   payments         Payment[]
   expenses         Expense[]
+  inventories      Inventory[]
 
   @@map("organizations")
 }
@@ -68,6 +69,7 @@ model User {
   auditLogs      AuditLog[]
   stockMovements StockMovement[]
   employees      Employee[]
+  inventories    Inventory[]
 
   @@map("users")
 }
@@ -284,6 +286,7 @@ model ProductService {
   defaultSupplier Supplier?       @relation(fields: [defaultSupplierId], references: [id], onDelete: SetNull)
   stockMovements  StockMovement[]
   lineItems       LineItem[]
+  inventoryLines  InventoryLine[]
 
   @@map("products_services")
 }
@@ -504,4 +507,48 @@ model Expense {
   supplier     Supplier?    @relation(fields: [supplierId], references: [id], onDelete: SetNull)
 
   @@map("expenses")
+}
+
+model Inventory {
+  id              String          @id @default(uuid())
+  organizationId  String          @map("organization_id")
+  inventoryNumber String          @map("inventory_number")
+  status          InventoryStatus @default(DRAFT)
+  notes           String?
+  createdBy       String?         @map("created_by")
+  validatedBy     String?         @map("validated_by")
+  createdAt       DateTime        @default(now()) @map("created_at")
+  validatedAt     DateTime?       @map("validated_at")
+  idempotencyKey  String?         @map("idempotency_key")
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User?           @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  lines        InventoryLine[]
+
+  @@unique([organizationId, idempotencyKey])
+  @@map("inventories")
+}
+
+enum InventoryStatus {
+  DRAFT
+  IN_PROGRESS
+  VALIDATED
+  CANCELLED
+}
+
+model InventoryLine {
+  id                  String   @id @default(uuid())
+  inventoryId         String   @map("inventory_id")
+  productId           String   @map("product_id")
+  theoreticalQuantity Float    @map("theoretical_quantity")
+  physicalQuantity    Float?   @map("physical_quantity")
+  varianceQuantity    Float?   @map("variance_quantity")
+  unitCost            Float    @default(0.0) @map("unit_cost")
+  varianceValue       Float?   @map("variance_value")
+  reason              String?
+
+  inventory Inventory      @relation(fields: [inventoryId], references: [id], onDelete: Cascade)
+  product   ProductService @relation(fields: [productId], references: [id])
+
+  @@map("inventory_lines")
 }
