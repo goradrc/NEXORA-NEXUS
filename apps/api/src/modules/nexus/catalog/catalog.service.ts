@@ -66,7 +66,7 @@ export class CatalogService {
     }
 
     const newItem: ProductServiceDto = {
-      id: `item-${Date.now()}`,
+      id: `item-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
       organizationId: orgId,
       categoryId: dto.categoryId,
       defaultSupplierId: dto.defaultSupplierId,
