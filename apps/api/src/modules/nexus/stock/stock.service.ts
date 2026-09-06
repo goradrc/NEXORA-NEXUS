@@ -179,6 +179,90 @@ export class StockService {
     return movement;
   }
 
+  public static recordAdjustmentMovement(
+    tenantContext: TenantContext,
+    params: {
+      productId: string;
+      adjustmentQuantity: number;
+      unitCost?: number;
+      reason?: string;
+      referenceDocType?: string;
+      referenceDocId?: string;
+      createdBy?: string;
+      idempotencyKey?: string;
+    },
+    userPermissions: string[]
+  ): StockMovementRecord {
+    RolesGuard.enforcePermission(userPermissions, 'nexus:stock:write');
+
+    if (params.idempotencyKey) {
+      const existing = this.movementsStore.find(
+        (m) => m.organizationId === tenantContext.organizationId && m.idempotencyKey === params.idempotencyKey
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
+    if (params.adjustmentQuantity === 0) {
+      return null as any;
+    }
+
+    const products = CatalogService.getProductsServices(tenantContext, userPermissions);
+    const product = products.find((p) => p.id === params.productId);
+
+    if (!product) {
+      throw new Error(`PRODUCT_NOT_FOUND: Product ${params.productId} not found or cross-tenant access denied`);
+    }
+
+    if (product.type !== 'PRODUCT') {
+      return null as any;
+    }
+
+    const absQuantity = Math.abs(params.adjustmentQuantity);
+
+    if (params.adjustmentQuantity < 0 && product.currentStock < absQuantity) {
+      throw new Error(
+        `INSUFFICIENT_STOCK_ERROR: Cannot complete stock ADJUSTMENT. Available: ${product.currentStock}, requested reduction: ${absQuantity}`
+      );
+    }
+
+    product.currentStock += params.adjustmentQuantity;
+
+    const defaultReason =
+      params.adjustmentQuantity > 0
+        ? `Ajustement inventaire (Excédent +${absQuantity})`
+        : `Ajustement inventaire (Manquant -${absQuantity})`;
+
+    const movement: StockMovementRecord = {
+      id: `mvt-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      organizationId: tenantContext.organizationId,
+      productId: params.productId,
+      type: 'ADJUSTMENT',
+      quantity: absQuantity,
+      unitCost: params.unitCost || product.purchaseCost || 0,
+      reason: params.reason || defaultReason,
+      referenceDocType: params.referenceDocType || 'INVENTORY',
+      referenceDocId: params.referenceDocId,
+      createdBy: params.createdBy || tenantContext.userId,
+      createdAt: new Date().toISOString(),
+      idempotencyKey: params.idempotencyKey,
+    };
+
+    this.movementsStore.push(movement);
+
+    AuditService.log({
+      organizationId: tenantContext.organizationId,
+      userId: tenantContext.userId,
+      action: 'STOCK_ADJUSTMENT',
+      entityName: 'ProductService',
+      entityId: params.productId,
+      changes: { newStock: product.currentStock, adjustmentDelta: params.adjustmentQuantity },
+    });
+
+    return movement;
+  }
+
   public static clearStoreForTesting(): void {
     this.movementsStore = [];
   }

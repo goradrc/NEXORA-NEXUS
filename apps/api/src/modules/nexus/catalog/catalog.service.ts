@@ -85,4 +85,28 @@ export class CatalogService {
     this.catalogStore.push(newItem);
     return newItem;
   }
+
+  public static clearStoreForTesting(): void {
+    this.categoriesStore = [
+      { id: 'cat-001', organizationId: 'org-1', name: 'Electronics', type: 'PRODUCT' },
+      { id: 'cat-002', organizationId: 'org-1', name: 'Consulting Services', type: 'SERVICE' }
+    ];
+    this.catalogStore = [
+      {
+        id: 'prod-001',
+        organizationId: 'org-1',
+        categoryId: 'cat-001',
+        type: 'PRODUCT',
+        reference: 'SKU-ELEC-01',
+        name: 'Smart Workstation Monitor',
+        description: '4K IPS Monitor',
+        salePrice: 450,
+        purchaseCost: 300,
+        taxRate: 20,
+        currentStock: 15,
+        minStockAlert: 5,
+        unit: 'PCE'
+      }
+    ];
+  }
 }
