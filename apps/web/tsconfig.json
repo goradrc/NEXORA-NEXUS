@@ -1,5 +1,13 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"],
+      "@nexora/core": ["../../packages/core/src"],
+      "@nexora/nexus": ["../../packages/nexus/src"],
+      "@nexora/ui": ["../../packages/ui-components/src"]
+    },
     "lib": [
       "dom",
       "dom.iterable",
