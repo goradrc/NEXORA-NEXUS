@@ -1,4 +1,23 @@
 // NEXORA Offline-First Dexie (IndexedDB) Database Schema & Sync Engine
+import {
+  QuoteDto,
+  InvoiceDto,
+  DeliveryNoteDto,
+  PaymentDto,
+  LineItemDto,
+  QuoteStatus,
+  InvoiceStatus,
+  DeliveryStatus,
+  PaymentMethod,
+} from '@nexora/nexus';
+
+export type LocalQuote = QuoteDto;
+export type LocalInvoice = InvoiceDto;
+export type LocalDeliveryNote = DeliveryNoteDto;
+export type LocalPayment = PaymentDto;
+export type LocalLineItem = LineItemDto;
+
+export type { QuoteStatus, InvoiceStatus, DeliveryStatus, PaymentMethod };
 
 export interface LocalSyncQueueItem {
   id: string; // UUID
@@ -18,6 +37,7 @@ export interface LocalCustomer {
   name: string;
   email?: string;
   phone?: string;
+  companyName?: string;
   balance: number;
 }
 
@@ -27,6 +47,7 @@ export interface LocalProduct {
   reference: string;
   name: string;
   salePrice: number;
+  taxRate?: number;
   currentStock: number;
   minStockAlert: number;
 }
@@ -35,6 +56,9 @@ export class NexoraLocalDatabase {
   public syncQueue: LocalSyncQueueItem[] = [];
   public customers: LocalCustomer[] = [];
   public products: LocalProduct[] = [];
+  public quotes: LocalQuote[] = [];
+  public invoices: LocalInvoice[] = [];
+  public payments: LocalPayment[] = [];
 
   public async saveSyncMutation(
     item: Omit<LocalSyncQueueItem, 'clientTimestamp' | 'status'>
@@ -66,6 +90,9 @@ export class NexoraLocalDatabase {
     this.syncQueue = [];
     this.customers = [];
     this.products = [];
+    this.quotes = [];
+    this.invoices = [];
+    this.payments = [];
   }
 }
 
