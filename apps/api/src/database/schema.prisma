@@ -361,6 +361,7 @@ model Quote {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customer     Customer     @relation(fields: [customerId], references: [id])
   invoices     Invoice[]
+  deliveryNotes DeliveryNote[]
   lineItems    LineItem[]
 
   @@map("quotes")
@@ -412,6 +413,7 @@ model DeliveryNote {
   organizationId  String         @map("organization_id")
   customerId      String         @map("customer_id")
   invoiceId       String?        @map("invoice_id")
+  quoteId         String?        @map("quote_id")
   deliveryNumber  String         @map("delivery_number")
   status          DeliveryStatus @default(DRAFT)
   shippingAddress String?        @map("shipping_address")
@@ -425,9 +427,42 @@ model DeliveryNote {
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   customer     Customer     @relation(fields: [customerId], references: [id])
   invoice      Invoice?     @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  quote        Quote?       @relation(fields: [quoteId], references: [id])
   lineItems    LineItem[]
 
+  @@unique([organizationId, deliveryNumber])
+  @@index([organizationId, createdAt, id])
   @@map("delivery_notes")
+}
+
+// Scoped to the authenticated actor as well as the tenant; responses cannot leak across users.
+model SalesOperation {
+  organizationId String @map("organization_id")
+  userId String @map("user_id")
+  key String
+  requestHash String @map("request_hash")
+  response Json
+  createdAt DateTime @default(now()) @map("created_at")
+  @@id([organizationId, userId, key])
+  @@map("sales_operations")
+}
+
+// One cumulative allocation per invoice/product, or standalone delivery note/product.
+model SalesStockAllocation {
+  organizationId String @map("organization_id")
+  scope String
+  productId String @map("product_id")
+  quantity Float
+  @@id([organizationId, scope, productId])
+  @@map("sales_stock_allocations")
+}
+
+model DeliverySequence {
+  organizationId String @map("organization_id")
+  year Int
+  value Int
+  @@id([organizationId, year])
+  @@map("delivery_sequences")
 }
 
 enum DeliveryStatus {
