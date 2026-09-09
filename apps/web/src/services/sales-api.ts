@@ -99,9 +99,24 @@ export class SalesApiClient {
     });
   }
 
-  public static async deliverDeliveryNote(id: string): Promise<ApiResponse<DeliveryNoteDto>> {
+  public static async shipDeliveryNote(id: string, idempotencyKey?: string): Promise<ApiResponse<DeliveryNoteDto>> {
+    return ApiClient.request<DeliveryNoteDto>(`/nexus/delivery-notes/${id}/ship`, {
+      method: 'POST',
+      headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : undefined,
+    });
+  }
+
+  public static async deliverDeliveryNote(id: string, idempotencyKey?: string): Promise<ApiResponse<DeliveryNoteDto>> {
     return ApiClient.request<DeliveryNoteDto>(`/nexus/delivery-notes/${id}/deliver`, {
       method: 'POST',
+      headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : undefined,
+    });
+  }
+
+  public static async cancelDeliveryNote(id: string, idempotencyKey?: string): Promise<ApiResponse<DeliveryNoteDto>> {
+    return ApiClient.request<DeliveryNoteDto>(`/nexus/delivery-notes/${id}/cancel`, {
+      method: 'POST',
+      headers: idempotencyKey ? { 'idempotency-key': idempotencyKey } : undefined,
     });
   }
 
