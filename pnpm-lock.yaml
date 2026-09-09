@@ -66,6 +66,9 @@ importers:
       '@nexora/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@nexora/nexus':
+        specifier: workspace:*
+        version: link:../../packages/nexus
       '@nexora/ui':
         specifier: workspace:*
         version: link:../../packages/ui-components
