@@ -74,8 +74,8 @@ export class SalesApiClient {
   }
 
   // Delivery Notes
-  public static async getDeliveryNotes(): Promise<ApiResponse<DeliveryNoteDto[]>> {
-    return ApiClient.request<DeliveryNoteDto[]>('/nexus/delivery-notes');
+  public static async getDeliveryNotes(offset = 0): Promise<ApiResponse<DeliveryNoteDto[]>> {
+    return ApiClient.request<DeliveryNoteDto[]>(offset === 0 ? '/nexus/delivery-notes' : `/nexus/delivery-notes?offset=${offset}`);
   }
 
   public static async getDeliveryNote(id: string): Promise<ApiResponse<DeliveryNoteDto>> {

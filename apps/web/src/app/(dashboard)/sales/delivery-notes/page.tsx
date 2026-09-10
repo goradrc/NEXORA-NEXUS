@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { PermissionGuard } from '../../../../components/ui/PermissionGuard';
 import { usePermissions } from '../../../../hooks/usePermissions';
 import { LocalCustomer, LocalProduct, localDb } from '../../../../offline/db';
@@ -10,10 +10,14 @@ import { DeliveryNoteModal } from '../../../../components/sales/DeliveryNoteModa
 
 export default function DeliveryNotesPage() {
   const canRead = usePermissions('nexus:delivery-notes:read');
-  const canWrite = usePermissions('nexus:delivery-notes:write');
+  const canCreate = usePermissions('nexus:delivery-notes:create');
+  const canUpdate = usePermissions('nexus:delivery-notes:update');
   const canManage = usePermissions('nexus:delivery-notes:manage');
 
   const [deliveryNotes, setDeliveryNotes] = useState<DeliveryNoteDto[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [hasNextPage, setHasNextPage] = useState(false);
+  const requestPending = useRef(false);
   const [customers, setCustomers] = useState<LocalCustomer[]>([]);
   const [products, setProducts] = useState<LocalProduct[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -27,7 +31,9 @@ export default function DeliveryNotesPage() {
   const [editingDeliveryNote, setEditingDeliveryNote] = useState<DeliveryNoteDto | null>(null);
   const [selectedDetailNote, setSelectedDetailNote] = useState<DeliveryNoteDto | null>(null);
 
-  const loadData = async () => {
+  const loadData = async (requestedOffset = offset) => {
+    if (requestPending.current) return;
+    requestPending.current = true;
     setLoading(true);
     setErrorMessage(null);
 
@@ -35,18 +41,26 @@ export default function DeliveryNotesPage() {
     setCustomers([...localDb.customers]);
     setProducts([...localDb.products]);
 
-    const response = await SalesApiClient.getDeliveryNotes();
-    if (response.error) {
-      setErrorMessage(response.error);
-    } else if (response.data) {
-      setDeliveryNotes(response.data);
+    try {
+      const response = await SalesApiClient.getDeliveryNotes(requestedOffset);
+      if (response.error) {
+        setErrorMessage(response.error);
+      } else if (response.data) {
+        setDeliveryNotes(response.data);
+        setOffset(requestedOffset);
+        setHasNextPage(response.data.length === 100);
+      }
+    } catch {
+      setErrorMessage('Impossible de charger les bons de livraison. Réessayez.');
+    } finally {
+      requestPending.current = false;
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
-    loadData();
-  }, []);
+    if (canRead) void loadData(0);
+  }, [canRead]);
 
   const customerMap = useMemo(() => {
     const map = new Map<string, LocalCustomer>();
@@ -76,16 +90,19 @@ export default function DeliveryNotesPage() {
   const deliveredNotes = deliveryNotes.filter((dn) => dn.status === 'DELIVERED').length;
 
   const handleOpenCreateModal = () => {
+    if (!canCreate) return;
     setEditingDeliveryNote(null);
     setIsModalOpen(true);
   };
 
   const handleOpenEditModal = (note: DeliveryNoteDto) => {
+    if (!canUpdate || note.status !== 'DRAFT') return;
     setEditingDeliveryNote(note);
     setIsModalOpen(true);
   };
 
   const handleSaveDeliveryNote = async (data: CreateDeliveryNoteDto | UpdateDeliveryNoteDto, key?: string) => {
+    if (editingDeliveryNote ? !canUpdate : !canCreate) return;
     setActionLoading(true);
     setErrorMessage(null);
 
@@ -131,6 +148,7 @@ export default function DeliveryNotesPage() {
   };
 
   const handleDeliver = async (note: DeliveryNoteDto) => {
+    if (!canManage || note.status !== 'SHIPPED') return;
     if (!confirm(`Confirmer la livraison du bon ${note.deliveryNumber} ? (Déstockage des produits)`)) return;
     setActionLoading(true);
     setErrorMessage(null);
@@ -208,10 +226,10 @@ export default function DeliveryNotesPage() {
             </p>
           </div>
 
-          {canWrite && (
+          {canCreate && (
             <button
               onClick={handleOpenCreateModal}
-              disabled={actionLoading}
+              disabled={actionLoading || loading}
               style={{
                 padding: '10px 18px',
                 borderRadius: 6,
@@ -254,10 +272,11 @@ export default function DeliveryNotesPage() {
           </div>
         )}
 
+        <p>Les compteurs et les filtres concernent uniquement la page affichée.</p>
         {/* KPIs */}
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
           <div style={{ padding: 16, backgroundColor: '#ffffff', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Total Bons</div>
+            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Bons sur cette page</div>
             <div style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', marginTop: 4 }}>{totalNotes}</div>
           </div>
 
@@ -447,10 +466,10 @@ export default function DeliveryNotesPage() {
                               👁️ Détails
                             </button>
 
-                            {canWrite && note.status === 'DRAFT' && (
+                            {canUpdate && note.status === 'DRAFT' && (
                               <button
                                 onClick={() => handleOpenEditModal(note)}
-                                disabled={actionLoading}
+                                disabled={actionLoading || loading}
                                 style={{
                                   padding: '5px 8px',
                                   borderRadius: 4,
@@ -468,7 +487,7 @@ export default function DeliveryNotesPage() {
                             {canManage && note.status === 'DRAFT' && (
                               <button
                                 onClick={() => handleShip(note)}
-                                disabled={actionLoading}
+                                disabled={actionLoading || loading}
                                 style={{
                                   padding: '5px 8px',
                                   borderRadius: 4,
@@ -484,10 +503,10 @@ export default function DeliveryNotesPage() {
                               </button>
                             )}
 
-                            {canManage && (note.status === 'DRAFT' || note.status === 'SHIPPED') && (
+                            {canManage && note.status === 'SHIPPED' && (
                               <button
                                 onClick={() => handleDeliver(note)}
-                                disabled={actionLoading}
+                                disabled={actionLoading || loading}
                                 style={{
                                   padding: '5px 8px',
                                   borderRadius: 4,
@@ -506,7 +525,7 @@ export default function DeliveryNotesPage() {
                             {canManage && note.status !== 'CANCELLED' && note.status !== 'DELIVERED' && (
                               <button
                                 onClick={() => handleCancel(note)}
-                                disabled={actionLoading}
+                                disabled={actionLoading || loading}
                                 style={{
                                   padding: '5px 8px',
                                   borderRadius: 4,
@@ -531,6 +550,13 @@ export default function DeliveryNotesPage() {
             </table>
           )}
         </div>
+
+        <nav aria-label="Pagination des bons de livraison" style={{ display: 'flex', gap: 16, alignItems: 'center', marginTop: 16 }}>
+          <button disabled={loading || actionLoading || offset === 0} onClick={() => loadData(Math.max(0, offset - 100))}>Précédent</button>
+          <span role="status">Page {offset / 100 + 1}</span>
+          <button disabled={loading || actionLoading || !hasNextPage} onClick={() => loadData(offset + 100)}>Suivant</button>
+          <button disabled={loading || actionLoading} onClick={() => loadData()}>Actualiser</button>
+        </nav>
 
         {/* Modal Drawer for Details */}
         {selectedDetailNote && (
