@@ -26,6 +26,7 @@ const navGroups: SidebarNavGroup[] = [
       { label: 'Clients CRM', href: '/customers', icon: '👥', permission: 'nexus:customers:read' },
       { label: 'Devis & Proformas', href: '/sales/quotes', icon: '📝', permission: 'nexus:quotes:read' },
       { label: 'Factures de Vente', href: '/sales/invoices', icon: '📄', permission: 'nexus:invoices:read' },
+      { label: 'Bons de Livraison', href: '/sales/delivery-notes', icon: '🚚', permission: 'nexus:delivery-notes:read' },
       { label: 'Encaissements', href: '/sales/payments', icon: '💳', permission: 'nexus:payments:read' },
     ],
   },

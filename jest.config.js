@@ -6,7 +6,12 @@ module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/*.test.ts'],
   transform: {
-    '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.base.json' }]
+    '^.+\\.(t|j)sx?$': ['ts-jest', { tsconfig: 'tsconfig.base.json', useESM: true }]
   },
-  moduleNameMapper: pathsToModuleNameMapper(compilerOptions.paths, { prefix: '<rootDir>/' })
+  transformIgnorePatterns: [
+    'node_modules/(?!(@nestjs)/)'
+  ],
+  moduleNameMapper: {
+    ...pathsToModuleNameMapper(compilerOptions.paths, { prefix: '<rootDir>/' }),
+  }
 };

@@ -142,14 +142,41 @@ describe('SalesApiClient', () => {
       expect(res).toEqual(mockResponse);
     });
 
-    it('should call deliverDeliveryNote endpoint', async () => {
+    it('should call shipDeliveryNote endpoint with idempotency header', async () => {
+      const mockResponse = { status: 200, data: { id: 'dn-1', status: 'SHIPPED' } };
+      (ApiClient.request as jest.Mock).mockResolvedValue(mockResponse);
+
+      const res = await SalesApiClient.shipDeliveryNote('dn-1', 'key-123');
+
+      expect(ApiClient.request).toHaveBeenCalledWith('/nexus/delivery-notes/dn-1/ship', {
+        method: 'POST',
+        headers: { 'idempotency-key': 'key-123' },
+      });
+      expect(res).toEqual(mockResponse);
+    });
+
+    it('should call deliverDeliveryNote endpoint with idempotency header', async () => {
       const mockResponse = { status: 200, data: { id: 'dn-1', status: 'DELIVERED' } };
       (ApiClient.request as jest.Mock).mockResolvedValue(mockResponse);
 
-      const res = await SalesApiClient.deliverDeliveryNote('dn-1');
+      const res = await SalesApiClient.deliverDeliveryNote('dn-1', 'key-456');
 
       expect(ApiClient.request).toHaveBeenCalledWith('/nexus/delivery-notes/dn-1/deliver', {
         method: 'POST',
+        headers: { 'idempotency-key': 'key-456' },
+      });
+      expect(res).toEqual(mockResponse);
+    });
+
+    it('should call cancelDeliveryNote endpoint', async () => {
+      const mockResponse = { status: 200, data: { id: 'dn-1', status: 'CANCELLED' } };
+      (ApiClient.request as jest.Mock).mockResolvedValue(mockResponse);
+
+      const res = await SalesApiClient.cancelDeliveryNote('dn-1');
+
+      expect(ApiClient.request).toHaveBeenCalledWith('/nexus/delivery-notes/dn-1/cancel', {
+        method: 'POST',
+        headers: undefined,
       });
       expect(res).toEqual(mockResponse);
     });

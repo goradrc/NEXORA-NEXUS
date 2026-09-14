@@ -95,6 +95,7 @@ export interface DeliveryNoteDto {
   organizationId: string;
   customerId: string;
   invoiceId?: string;
+  quoteId?: string;
   deliveryNumber: string;
   status: DeliveryStatus;
   shippingAddress?: string;
