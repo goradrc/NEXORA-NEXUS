@@ -6,6 +6,7 @@ export function usePermissions(requiredPermission?: string): boolean {
   if (!requiredPermission) return true;
 
   return (
+    user.permissions.includes('*') ||
     user.permissions.includes('nexus:admin') ||
     user.permissions.includes(requiredPermission)
   );
