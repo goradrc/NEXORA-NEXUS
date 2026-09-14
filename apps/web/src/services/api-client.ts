@@ -30,6 +30,7 @@ export class ApiClient {
       ...(options.headers || {}),
     };
 
+    const requestToken = this.token;
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
@@ -45,6 +46,9 @@ export class ApiClient {
       const data = await response.json().catch(() => null);
 
       if (!response.ok) {
+        if (status === 401 && requestToken && requestToken === this.token && typeof window !== 'undefined') {
+          window.dispatchEvent(new Event('nexus:unauthorized'));
+        }
         return {
           status,
           error: data?.message || data?.error || `HTTP Error ${status}`,

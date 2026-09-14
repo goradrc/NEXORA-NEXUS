@@ -7,8 +7,10 @@ import { LocalCustomer, LocalProduct, localDb } from '../../../../offline/db';
 import { DeliveryNoteDto, CreateDeliveryNoteDto, UpdateDeliveryNoteDto } from '@nexora/nexus';
 import { SalesApiClient } from '../../../../services/sales-api';
 import { DeliveryNoteModal } from '../../../../components/sales/DeliveryNoteModal';
+import { useAuth } from '../../../../context/AuthContext';
 
 export default function DeliveryNotesPage() {
+  const { activeOrganization } = useAuth();
   const canRead = usePermissions('nexus:delivery-notes:read');
   const canCreate = usePermissions('nexus:delivery-notes:create');
   const canUpdate = usePermissions('nexus:delivery-notes:update');
@@ -38,8 +40,8 @@ export default function DeliveryNotesPage() {
     setErrorMessage(null);
 
     // Offline data for dropdowns
-    setCustomers([...localDb.customers]);
-    setProducts([...localDb.products]);
+    setCustomers(localDb.customers.filter(c => c.organizationId === activeOrganization?.id));
+    setProducts(localDb.products.filter(p => p.organizationId === activeOrganization?.id));
 
     try {
       const response = await SalesApiClient.getDeliveryNotes(requestedOffset);
