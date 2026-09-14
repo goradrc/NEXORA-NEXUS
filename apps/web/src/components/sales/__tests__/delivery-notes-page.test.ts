@@ -5,6 +5,7 @@ import { usePermissions } from '../../../hooks/usePermissions';
 import { ApiClient } from '../../../services/api-client';
 
 jest.mock('../../../hooks/usePermissions');
+jest.mock('../../../context/AuthContext', () => ({ useAuth: () => ({ activeOrganization: { id: 'org-test' } }) }));
 jest.mock('../../../services/api-client');
 jest.mock('../../../offline/db', () => ({ localDb: { customers: [], products: [] } }));
 jest.mock('../../ui/PermissionGuard', () => ({ PermissionGuard: ({ children }: any) => children }));
