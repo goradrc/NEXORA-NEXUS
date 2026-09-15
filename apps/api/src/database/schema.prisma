@@ -465,6 +465,15 @@ model DeliverySequence {
   @@map("delivery_sequences")
 }
 
+model InvoiceSequence {
+  organizationId String @map("organization_id")
+  year           Int
+  value          Int
+
+  @@id([organizationId, year])
+  @@map("invoice_sequences")
+}
+
 enum DeliveryStatus {
   DRAFT
   SHIPPED

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, ForbiddenException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, UnauthorizedException } from '../../../common/exceptions';
 import { RolesGuard, TenantContext } from '../../../../../../packages/core/src';
 import { Prisma } from '@prisma/client';
 import { createHash } from 'crypto';

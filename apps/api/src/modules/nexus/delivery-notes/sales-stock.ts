@@ -1,18 +1,71 @@
-import { ConflictException, NotFoundException } from '@nestjs/common';
+import { ConflictException, NotFoundException } from '../../../common/exceptions';
 import { TenantContext } from '@nexora/core';
 import { Prisma } from '@prisma/client';
 import { quantities } from './delivery-validation';
 
-/** Both delivery confirmation and invoice issue MUST call this inside a Serializable transaction. */
-export async function reconcileSalesStock(tx: Prisma.TransactionClient, context: TenantContext,
-  source: { type: 'INVOICE' | 'DELIVERY_NOTE'; id: string; invoiceId?: string | null }) {
+/** Both delivery confirmation, invoice issue, and invoice cancellation MUST call this inside a Serializable transaction. */
+export async function reconcileSalesStock(
+  tx: Prisma.TransactionClient,
+  context: TenantContext,
+  source: { type: 'INVOICE' | 'DELIVERY_NOTE'; id: string; invoiceId?: string | null; cancel?: boolean }
+) {
   const organizationId = context.organizationId;
   const invoiceId = source.type === 'INVOICE' ? source.id : source.invoiceId;
   const scope = invoiceId ? 'INVOICE:' + invoiceId : 'DELIVERY_NOTE:' + source.id;
+
+  if (source.cancel) {
+    if (source.type === 'INVOICE') {
+      const allocations = await tx.salesStockAllocation.findMany({
+        where: { organizationId, scope: 'INVOICE:' + source.id },
+      });
+
+      for (const allocation of allocations) {
+        if (allocation.quantity <= 0) continue;
+        const product = await tx.productService.findFirst({
+          where: { id: allocation.productId, organizationId },
+        });
+        if (!product || product.type === 'SERVICE') continue;
+
+        const restoreQty = allocation.quantity;
+
+        await tx.$executeRaw`UPDATE products_services
+          SET current_stock = (current_stock::numeric + ${restoreQty}::numeric)::double precision
+          WHERE id = ${allocation.productId} AND organization_id = ${organizationId} AND type = 'PRODUCT'`;
+
+        await tx.stockMovement.create({
+          data: {
+            organizationId,
+            productId: allocation.productId,
+            type: 'IN',
+            quantity: restoreQty,
+            unitCost: product.purchaseCost,
+            reason: 'INVOICE_CANCEL_RESTORE',
+            referenceDocType: 'INVOICE',
+            referenceDocId: source.id,
+            createdBy: context.userId,
+          },
+        });
+
+        await tx.salesStockAllocation.update({
+          where: {
+            organizationId_scope_productId: {
+              organizationId,
+              scope: allocation.scope,
+              productId: allocation.productId,
+            },
+          },
+          data: { quantity: 0 },
+        });
+      }
+    }
+    return;
+  }
+
   let desired: Map<string, number>;
   let issuedInvoice = false;
   let priorDelivered = new Map<string, number>();
   let referenceIds = [source.id];
+
   if (invoiceId) {
     const invoice = await tx.invoice.findFirst({ where: { id: invoiceId, organizationId }, include: { lineItems: true } });
     if (!invoice) throw new NotFoundException('Invoice not found');
@@ -34,6 +87,7 @@ export async function reconcileSalesStock(tx: Prisma.TransactionClient, context:
     if (!note) throw new NotFoundException('Delivery note not found');
     desired = quantities(note.status === 'DELIVERED' ? note.lineItems : []);
   }
+
   // Deterministic order reduces deadlocks for concurrent documents sharing multiple products.
   for (const [productId, required] of [...desired].sort(([a], [b]) => a.localeCompare(b))) {
     const product = await tx.productService.findFirst({ where: { id: productId, organizationId } });

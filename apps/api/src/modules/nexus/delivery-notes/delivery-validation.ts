@@ -1,4 +1,4 @@
-import { BadRequestException } from '@nestjs/common';
+import { BadRequestException } from '../../../common/exceptions';
 import type { CreateLineItemDto } from '@nexora/nexus';
 import { Prisma } from '@prisma/client';
 

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '../../../common/exceptions';
 import { TenantContext } from '@nexora/core';
 import type { CreateDeliveryNoteDto, UpdateDeliveryNoteDto } from '@nexora/nexus';
 import { Prisma } from '@prisma/client';
