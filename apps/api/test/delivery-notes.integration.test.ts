@@ -1,10 +1,8 @@
 import 'reflect-metadata';
 import { randomUUID, createHmac } from 'crypto';
-import { NestFactory } from '@nestjs/core';
 import { AuthService } from '@nexora/core';
 import { PrismaService } from '../src/database/database.service';
 import { DeliveryNotesService } from '../src/modules/nexus/delivery-notes/delivery-notes.service';
-import { DeliveryNotesModule } from '../src/modules/nexus/delivery-notes/delivery-notes.module';
 
 const enabled = process.env.DELIVERY_TEST_DATABASE_URL;
 (enabled ? describe : describe.skip)('Delivery Notes PostgreSQL and HTTP', () => {
@@ -39,6 +37,8 @@ const enabled = process.env.DELIVERY_TEST_DATABASE_URL;
     db = new PrismaService();
     await db.$connect();
     service = new DeliveryNotesService(db);
+    const { NestFactory } = await import('@nestjs/core');
+    const { DeliveryNotesModule } = await import('../src/modules/nexus/delivery-notes/delivery-notes.module');
     app = await NestFactory.create(DeliveryNotesModule, { logger: false });
     app.setGlobalPrefix('api/v1');
     await app.listen(0, '127.0.0.1');

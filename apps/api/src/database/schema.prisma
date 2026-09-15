@@ -397,6 +397,7 @@ model Invoice {
   payments      Payment[]
   lineItems     LineItem[]
 
+  @@unique([organizationId, invoiceNumber])
   @@map("invoices")
 }
 
@@ -463,6 +464,15 @@ model DeliverySequence {
   value Int
   @@id([organizationId, year])
   @@map("delivery_sequences")
+}
+
+model InvoiceSequence {
+  organizationId String @map("organization_id")
+  year           Int
+  value          Int
+
+  @@id([organizationId, year])
+  @@map("invoice_sequences")
 }
 
 enum DeliveryStatus {

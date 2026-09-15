@@ -87,6 +87,7 @@ export interface UpdateInvoiceDto {
   customerId?: string;
   dueDate?: string;
   lineItems?: CreateLineItemDto[];
+  deliveryNoteIds?: string[];
   notes?: string;
 }
 

@@ -6,7 +6,11 @@ module.exports = {
   testEnvironment: 'node',
   testMatch: ['**/*.test.ts'],
   transform: {
-    '^.+\\.tsx?$': ['ts-jest', { tsconfig: 'tsconfig.base.json' }]
+    '^.+\\.(t|j)sx?$': ['ts-jest', { tsconfig: 'tsconfig.base.json', allowJs: true }]
   },
-  moduleNameMapper: pathsToModuleNameMapper(compilerOptions.paths, { prefix: '<rootDir>/' })
+  transformIgnorePatterns: ['node_modules/(?!(\\.pnpm/.*@nestjs|@nestjs)/)'],
+  moduleNameMapper: {
+    ...pathsToModuleNameMapper(compilerOptions.paths, { prefix: '<rootDir>/' }),
+    '^.*/load-package\\.util(\\..*)?$': '<rootDir>/apps/api/test/mocks/load-package.util.js'
+  }
 };
