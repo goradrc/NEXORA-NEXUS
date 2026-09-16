@@ -1,530 +1,148 @@
 'use client';
-
-import React, { useState, useEffect, useMemo } from 'react';
-import { PermissionGuard } from '../../../../components/ui/PermissionGuard';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { CreateInvoiceDto, InvoiceDto } from '@nexora/nexus';
+import { useAuth } from '../../../../context/AuthContext';
 import { usePermissions } from '../../../../hooks/usePermissions';
-import {
-  LocalInvoice,
-  LocalPayment,
-  LocalCustomer,
-  LocalProduct,
-  localDb,
-} from '../../../../offline/db';
+import { SalesApiClient } from '../../../../services/sales-api';
 import { InvoiceModal } from '../../../../components/sales/InvoiceModal';
-import { PaymentModal } from '../../../../components/sales/PaymentModal';
+import { Button } from '../../../../components/ui/Button';
+import styles from '../../../../components/sales/invoices.module.css';
 
 export default function InvoicesPage() {
+  const { user, token } = useAuth();
   const canRead = usePermissions('nexus:invoices:read');
-  const canWrite = usePermissions('nexus:invoices:write');
-  const canDelete = usePermissions('nexus:invoices:delete');
-  const canCreatePayment = usePermissions('nexus:payments:write');
-
-  const [invoices, setInvoices] = useState<LocalInvoice[]>([]);
-  const [customers, setCustomers] = useState<LocalCustomer[]>([]);
-  const [products, setProducts] = useState<LocalProduct[]>([]);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
-
-  const [isInvoiceModalOpen, setIsInvoiceModalOpen] = useState(false);
-  const [editingInvoice, setEditingInvoice] = useState<LocalInvoice | null>(null);
-
-  const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
-  const [payingInvoice, setPayingInvoice] = useState<LocalInvoice | null>(null);
-
-  const loadData = () => {
-    setInvoices([...localDb.invoices]);
-    setCustomers([...localDb.customers]);
-    setProducts([...localDb.products]);
-  };
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const customerMap = useMemo(() => {
-    const map = new Map<string, LocalCustomer>();
-    customers.forEach((c) => map.set(c.id, c));
-    return map;
-  }, [customers]);
-
-  const filteredInvoices = useMemo(() => {
-    return invoices.filter((invoice) => {
-      const customer = customerMap.get(invoice.customerId);
-      const matchesSearch =
-        invoice.invoiceNumber.toLowerCase().includes(searchTerm.toLowerCase()) ||
-        (customer && customer.name.toLowerCase().includes(searchTerm.toLowerCase()));
-
-      const matchesStatus =
-        selectedStatus === 'ALL' || invoice.status === selectedStatus;
-
-      return matchesSearch && matchesStatus;
-    });
-  }, [invoices, searchTerm, selectedStatus, customerMap]);
-
-  // Financial KPIs
-  const totalInvoiced = useMemo(
-    () => invoices.reduce((sum, inv) => sum + inv.totalAmount, 0),
-    [invoices]
-  );
-  const totalCollected = useMemo(
-    () => invoices.reduce((sum, inv) => sum + inv.amountPaid, 0),
-    [invoices]
-  );
-  const totalReceivables = useMemo(
-    () => invoices.reduce((sum, inv) => sum + inv.amountDue, 0),
-    [invoices]
-  );
-
-  const handleOpenCreateModal = () => {
-    setEditingInvoice(null);
-    setIsInvoiceModalOpen(true);
-  };
-
-  const handleOpenEditModal = (invoice: LocalInvoice) => {
-    setEditingInvoice(invoice);
-    setIsInvoiceModalOpen(true);
-  };
-
-  const handleOpenPaymentModal = (invoice: LocalInvoice) => {
-    setPayingInvoice(invoice);
-    setIsPaymentModalOpen(true);
-  };
-
-  const handleSaveInvoice = (data: Partial<LocalInvoice>) => {
-    if (editingInvoice) {
-      // Update
-      const index = localDb.invoices.findIndex((i) => i.id === editingInvoice.id);
-      if (index !== -1) {
-        const lineItems = data.lineItems || [];
-        const totalUntaxed = lineItems.reduce((sum, l) => sum + (l.totalPrice || 0), 0);
-        const totalTax = lineItems.reduce(
-          (sum, l) => sum + Number(((l.totalPrice || 0) * ((l.taxRate || 0) / 100)).toFixed(2)),
-          0
-        );
-        const totalAmount = Number((totalUntaxed + totalTax).toFixed(2));
-        const amountPaid = localDb.invoices[index].amountPaid || 0;
-        const amountDue = Math.max(0, totalAmount - amountPaid);
-
-        localDb.invoices[index] = {
-          ...localDb.invoices[index],
-          ...data,
-          totalUntaxed,
-          totalTax,
-          totalAmount,
-          amountDue,
-        } as LocalInvoice;
+  const canCreate = usePermissions('nexus:invoices:create');
+  const canUpdate = usePermissions('nexus:invoices:update');
+  const canManage = usePermissions('nexus:invoices:manage');
+  if (!user || !canRead) return <p role="alert">Accès non autorisé aux factures.</p>;
+  return <InvoiceWorkspace key={JSON.stringify([user.userId, user.organizationId, token, canCreate, canUpdate, canManage])}
+    canCreate={canCreate} canUpdate={canUpdate} canManage={canManage} />;
+}
+function InvoiceWorkspace({ canCreate, canUpdate, canManage }: { canCreate: boolean; canUpdate: boolean; canManage: boolean }) {
+  const [invoices, setInvoices] = useState<InvoiceDto[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [hasNext, setHasNext] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [status, setStatus] = useState('ALL');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [selected, setSelected] = useState<InvoiceDto | null>(null);
+  const reading = useRef(false);
+  const mutating = useRef(false);
+  const alive = useRef(true);
+  const keys = useRef(new Map<string, string>());
+  const load = useCallback(async (nextOffset: number) => {
+    if (reading.current || !alive.current) return;
+    reading.current = true; setLoading(true); setError('');
+    try {
+      const response = await SalesApiClient.getInvoices(nextOffset);
+      if (!alive.current) return;
+      if (response.error || !response.data) {
+        setError(response.error || 'Réponse du serveur invalide.');
+      } else {
+        setInvoices(response.data); setOffset(nextOffset); setHasNext(response.data.length === 100);
       }
-    } else {
-      // Create
-      const lineItems = data.lineItems || [];
-      const totalUntaxed = lineItems.reduce((sum, l) => sum + (l.totalPrice || 0), 0);
-      const totalTax = lineItems.reduce(
-        (sum, l) => sum + Number(((l.totalPrice || 0) * ((l.taxRate || 0) / 100)).toFixed(2)),
-        0
-      );
-      const totalAmount = Number((totalUntaxed + totalTax).toFixed(2));
-
-      const newInvoice: LocalInvoice = {
-        id: crypto.randomUUID(),
-        organizationId: 'org-demo',
-        customerId: data.customerId!,
-        invoiceNumber: `FAC-2026-${String(localDb.invoices.length + 1).padStart(4, '0')}`,
-        status: data.status || 'UNPAID',
-        totalUntaxed,
-        totalTax,
-        totalAmount,
-        amountPaid: 0,
-        amountDue: totalAmount,
-        dueDate: data.dueDate || new Date().toISOString(),
-        createdAt: new Date().toISOString(),
-        lineItems,
-      };
-
-      localDb.invoices.push(newInvoice);
-    }
-
-    loadData();
-    setIsInvoiceModalOpen(false);
+    } catch { if (alive.current) setError('Impossible de charger les factures. Réessayez.'); }
+    finally { reading.current = false; if (alive.current) setLoading(false); }
+  }, []);
+  useEffect(() => {
+    alive.current = true; void load(0);
+    return () => { alive.current = false; };
+  }, [load]);
+  const save = async (dto: CreateInvoiceDto, key: string) => {
+    if (mutating.current || reading.current || (selected ? !canUpdate || selected.status !== 'DRAFT' : !canCreate)) return false;
+    mutating.current = true; setBusy(true); setError('');
+    try {
+      const response = selected
+        ? await SalesApiClient.updateInvoice(selected.id, dto, key)
+        : await SalesApiClient.createInvoice({ ...dto, idempotencyKey: key });
+      if (!alive.current) return false;
+      if (response.error || !response.data) { setError(response.error || 'Enregistrement non confirmé.'); return false; }
+      setModalOpen(false);
+      // Show the acknowledged server result even if the subsequent refresh fails.
+      setInvoices(current => selected ? current.map(i => i.id === response.data!.id ? response.data! : i) : current);
+      await load(selected ? offset : 0);
+      return true;
+    } catch { if (alive.current) setError('Enregistrement non confirmé. Réessayez.'); return false; }
+    finally { mutating.current = false; if (alive.current) setBusy(false); }
   };
-
-  const handleSavePayment = (data: Partial<LocalPayment>) => {
-    if (!payingInvoice) return;
-
-    const amount = data.amount || 0;
-    const newPayment: LocalPayment = {
-      id: crypto.randomUUID(),
-      organizationId: payingInvoice.organizationId,
-      customerId: payingInvoice.customerId,
-      invoiceId: payingInvoice.id,
-      paymentNumber: `PAY-2026-${String(localDb.payments.length + 1).padStart(4, '0')}`,
-      amount,
-      paymentMethod: data.paymentMethod || 'BANK_TRANSFER',
-      referenceCode: data.referenceCode,
-      paymentDate: data.paymentDate || new Date().toISOString(),
-      createdAt: new Date().toISOString(),
-    };
-
-    localDb.payments.push(newPayment);
-
-    // Update Invoice balances
-    const invIndex = localDb.invoices.findIndex((i) => i.id === payingInvoice.id);
-    if (invIndex !== -1) {
-      const inv = localDb.invoices[invIndex];
-      const newPaid = Number((inv.amountPaid + amount).toFixed(2));
-      const newDue = Math.max(0, Number((inv.totalAmount - newPaid).toFixed(2)));
-      const newStatus = newDue === 0 ? 'PAID' : 'PARTIAL';
-
-      localDb.invoices[invIndex] = {
-        ...inv,
-        amountPaid: newPaid,
-        amountDue: newDue,
-        status: newStatus,
-      };
-    }
-
-    loadData();
-    setIsPaymentModalOpen(false);
+  const transition = async (invoice: InvoiceDto, action: 'issue' | 'cancel') => {
+    if (!canManage || mutating.current || reading.current) return;
+    if (action === 'issue' ? invoice.status !== 'DRAFT' : ['PAID', 'CANCELLED'].includes(invoice.status)) return;
+    if (!window.confirm(action === 'issue' ? 'Émettre cette facture ? Cette action peut mettre à jour le stock et le solde client.' : 'Annuler cette facture ? Cette action peut mettre à jour le stock et le solde client.')) return;
+    const operation = action + ':' + invoice.id;
+    if (!keys.current.has(operation)) keys.current.set(operation, crypto.randomUUID());
+    mutating.current = true; setBusy(true); setError('');
+    try {
+      const key = keys.current.get(operation)!;
+      const response = action === 'issue'
+        ? await SalesApiClient.issueInvoice(invoice.id, key)
+        : await SalesApiClient.cancelInvoice(invoice.id, 'Annulation depuis les factures de vente', key);
+      if (!alive.current) return;
+      if (response.error || !response.data) { setError(response.error || 'Action non confirmée. Réessayez.'); return; }
+      keys.current.delete(operation);
+      setInvoices(current => current.map(i => i.id === invoice.id ? response.data! : i));
+      await load(offset);
+    } catch { if (alive.current) setError('Action non confirmée. Réessayez.'); }
+    finally { mutating.current = false; if (alive.current) setBusy(false); }
   };
-
-  const handleDeleteInvoice = (id: string) => {
-    if (confirm('Êtes-vous sûr de vouloir supprimer cette facture brouillon ?')) {
-      localDb.invoices = localDb.invoices.filter((i) => i.id !== id);
-      loadData();
-    }
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'DRAFT':
-        return { label: 'Brouillon', bg: '#f1f5f9', color: '#475569' };
-      case 'UNPAID':
-        return { label: 'Non Payée', bg: '#fef3c7', color: '#b45309' };
-      case 'PARTIAL':
-        return { label: 'Partielle', bg: '#e0f2fe', color: '#0369a1' };
-      case 'PAID':
-        return { label: 'Payée', bg: '#dcfce7', color: '#15803d' };
-      case 'CANCELLED':
-        return { label: 'Annulée', bg: '#fee2e2', color: '#b91c1c' };
-      default:
-        return { label: status, bg: '#f1f5f9', color: '#475569' };
-    }
-  };
-
-  if (!canRead) {
-    return (
-      <PermissionGuard permission="nexus:invoices:read">
-        <div>Accès non autorisé aux Factures.</div>
-      </PermissionGuard>
-    );
-  }
-
-  return (
-    <PermissionGuard permission="nexus:invoices:read">
-      <div style={{ padding: 24, maxWidth: 1200, margin: '0 auto' }}>
-        {/* Header */}
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 24,
-          }}
-        >
-          <div>
-            <h1 style={{ margin: 0, fontSize: 24, fontWeight: 800, color: '#0f172a' }}>
-              🧾 Factures de Vente
-            </h1>
-            <p style={{ margin: '4px 0 0 0', fontSize: 14, color: '#64748b' }}>
-              Gestion des factures clients, suivi des paiements et encaissements
-            </p>
-          </div>
-
-          {canWrite && (
-            <button
-              onClick={handleOpenCreateModal}
-              style={{
-                padding: '10px 18px',
-                borderRadius: 6,
-                backgroundColor: '#0284c7',
-                color: '#ffffff',
-                border: 'none',
-                fontSize: 14,
-                fontWeight: 700,
-                cursor: 'pointer',
-              }}
-            >
-              ➕ Nouvelle Facture
-            </button>
-          )}
-        </div>
-
-        {/* KPIs */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16, marginBottom: 24 }}>
-          <div style={{ padding: 16, backgroundColor: '#ffffff', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Total Facturé TTC</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#0f172a', marginTop: 4 }}>
-              {totalInvoiced.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
-            </div>
-          </div>
-
-          <div style={{ padding: 16, backgroundColor: '#ffffff', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Montant Encaissé</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#16a34a', marginTop: 4 }}>
-              {totalCollected.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
-            </div>
-          </div>
-
-          <div style={{ padding: 16, backgroundColor: '#ffffff', borderRadius: 8, border: '1px solid #e2e8f0' }}>
-            <div style={{ fontSize: 12, color: '#64748b', fontWeight: 600 }}>Reste à Recouvrer</div>
-            <div style={{ fontSize: 22, fontWeight: 800, color: '#d97706', marginTop: 4 }}>
-              {totalReceivables.toLocaleString('fr-FR', { style: 'currency', currency: 'EUR' })}
-            </div>
-          </div>
-        </div>
-
-        {/* Filters */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            padding: 16,
-            borderRadius: 8,
-            border: '1px solid #e2e8f0',
-            marginBottom: 20,
-            display: 'flex',
-            gap: 16,
-            flexWrap: 'wrap',
-          }}
-        >
-          <input
-            type="text"
-            placeholder="Rechercher par N° facture ou nom de client..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            style={{
-              flex: 1,
-              minWidth: 260,
-              padding: '8px 12px',
-              borderRadius: 6,
-              border: '1px solid #cbd5e1',
-              fontSize: 14,
-            }}
-          />
-
-          <select
-            value={selectedStatus}
-            onChange={(e) => setSelectedStatus(e.target.value)}
-            style={{
-              padding: '8px 12px',
-              borderRadius: 6,
-              border: '1px solid #cbd5e1',
-              fontSize: 14,
-              backgroundColor: '#ffffff',
-            }}
-          >
-            <option value="ALL">Tous les Statuts</option>
-            <option value="DRAFT">Brouillons</option>
-            <option value="UNPAID">Non Payées</option>
-            <option value="PARTIAL">Partiellement Payées</option>
-            <option value="PAID">Payées</option>
-            <option value="CANCELLED">Annulées</option>
-          </select>
-        </div>
-
-        {/* Data Table */}
-        <div
-          style={{
-            backgroundColor: '#ffffff',
-            borderRadius: 8,
-            border: '1px solid #e2e8f0',
-            overflow: 'hidden',
-          }}
-        >
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-            <thead>
-              <tr style={{ backgroundColor: '#f8fafc', borderBottom: '1px solid #e2e8f0' }}>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                  N° FACTURE
-                </th>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                  CLIENT
-                </th>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                  STATUT
-                </th>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                  ÉCHÉANCE
-                </th>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                  TOTAL TTC
-                </th>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                  PAYÉ
-                </th>
-                <th style={{ padding: '12px 16px', fontSize: 12, fontWeight: 700, color: '#475569' }}>
-                  RESTE DÛ
-                </th>
-                <th
-                  style={{
-                    padding: '12px 16px',
-                    fontSize: 12,
-                    fontWeight: 700,
-                    color: '#475569',
-                    textAlign: 'right',
-                  }}
-                >
-                  ACTIONS
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filteredInvoices.length === 0 ? (
-                <tr>
-                  <td colSpan={8} style={{ padding: 32, textAlign: 'center', color: '#94a3b8' }}>
-                    Aucune facture trouvée.
-                  </td>
-                </tr>
-              ) : (
-                filteredInvoices.map((invoice) => {
-                  const cust = customerMap.get(invoice.customerId);
-                  const badge = getStatusBadge(invoice.status);
-
-                  return (
-                    <tr key={invoice.id} style={{ borderBottom: '1px solid #f1f5f9', fontSize: 14 }}>
-                      <td style={{ padding: '14px 16px', fontWeight: 600, color: '#0f172a' }}>
-                        <code>{invoice.invoiceNumber}</code>
-                      </td>
-                      <td style={{ padding: '14px 16px' }}>
-                        <div style={{ fontWeight: 600, color: '#0f172a' }}>
-                          {cust ? cust.name : 'Client Inconnu'}
-                        </div>
-                        {cust?.companyName && (
-                          <div style={{ fontSize: 12, color: '#64748b' }}>{cust.companyName}</div>
-                        )}
-                      </td>
-                      <td style={{ padding: '14px 16px' }}>
-                        <span
-                          style={{
-                            padding: '4px 8px',
-                            borderRadius: 4,
-                            fontSize: 11,
-                            fontWeight: 700,
-                            backgroundColor: badge.bg,
-                            color: badge.color,
-                          }}
-                        >
-                          {badge.label}
-                        </span>
-                      </td>
-                      <td style={{ padding: '14px 16px', color: '#475569' }}>
-                        {invoice.dueDate
-                          ? new Date(invoice.dueDate).toLocaleDateString('fr-FR')
-                          : '—'}
-                      </td>
-                      <td style={{ padding: '14px 16px', fontWeight: 700, color: '#0f172a' }}>
-                        {invoice.totalAmount.toLocaleString('fr-FR', {
-                          style: 'currency',
-                          currency: 'EUR',
-                        })}
-                      </td>
-                      <td style={{ padding: '14px 16px', color: '#16a34a', fontWeight: 600 }}>
-                        {invoice.amountPaid.toLocaleString('fr-FR', {
-                          style: 'currency',
-                          currency: 'EUR',
-                        })}
-                      </td>
-                      <td
-                        style={{
-                          padding: '14px 16px',
-                          color: invoice.amountDue > 0 ? '#d97706' : '#16a34a',
-                          fontWeight: 700,
-                        }}
-                      >
-                        {invoice.amountDue.toLocaleString('fr-FR', {
-                          style: 'currency',
-                          currency: 'EUR',
-                        })}
-                      </td>
-                      <td style={{ padding: '14px 16px', textAlign: 'right' }}>
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                          {invoice.amountDue > 0 && canCreatePayment && (
-                            <button
-                              onClick={() => handleOpenPaymentModal(invoice)}
-                              style={{
-                                padding: '6px 10px',
-                                borderRadius: 4,
-                                border: '1px solid #16a34a',
-                                backgroundColor: '#f0fdf4',
-                                color: '#15803d',
-                                fontSize: 12,
-                                fontWeight: 700,
-                                cursor: 'pointer',
-                              }}
-                            >
-                              💳 Encaisser
-                            </button>
-                          )}
-
-                          {canWrite && (
-                            <button
-                              onClick={() => handleOpenEditModal(invoice)}
-                              style={{
-                                padding: '6px 10px',
-                                borderRadius: 4,
-                                border: '1px solid #cbd5e1',
-                                backgroundColor: '#ffffff',
-                                fontSize: 12,
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                              }}
-                            >
-                              ✏️ Éditer
-                            </button>
-                          )}
-
-                          {canDelete && invoice.status === 'DRAFT' && (
-                            <button
-                              onClick={() => handleDeleteInvoice(invoice.id)}
-                              style={{
-                                padding: '6px 10px',
-                                borderRadius: 4,
-                                border: '1px solid #fecaca',
-                                backgroundColor: '#fef2f2',
-                                color: '#dc2626',
-                                fontSize: 12,
-                                fontWeight: 600,
-                                cursor: 'pointer',
-                              }}
-                            >
-                              🗑️ Supprimer
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
-              )}
-            </tbody>
-          </table>
-        </div>
-
-        {/* Modals */}
-        <InvoiceModal
-          isOpen={isInvoiceModalOpen}
-          onClose={() => setIsInvoiceModalOpen(false)}
-          onSave={handleSaveInvoice}
-          initialData={editingInvoice}
-          customers={customers}
-          products={products}
-        />
-
-        <PaymentModal
-          isOpen={isPaymentModalOpen}
-          onClose={() => setIsPaymentModalOpen(false)}
-          onSave={handleSavePayment}
-          invoice={payingInvoice}
-        />
-      </div>
-    </PermissionGuard>
-  );
+  const visible = invoices.filter(i => (status === 'ALL' || i.status === status) &&
+    (i.invoiceNumber + ' ' + i.customerId).toLowerCase().includes(search.toLowerCase()));
+  const issued = invoices.filter(i => ['UNPAID', 'PARTIAL', 'PAID'].includes(i.status));
+  const amount = (value: number) => Number(value).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const labels: Record<string, string> = { DRAFT: 'Brouillon', UNPAID: 'Non payée', PARTIAL: 'Partiellement payée', PAID: 'Payée', CANCELLED: 'Annulée' };
+  return <section className={styles.workspace}>
+    <header className="flex flex-wrap justify-between items-center gap-3">
+      <div><h1 className="text-2xl font-bold">Factures de vente</h1><p className="text-gray-600">Brouillons, émission et suivi des soldes.</p></div>
+      {canCreate && <Button disabled={loading || busy} onClick={() => { setSelected(null); setModalOpen(true); }}>Nouveau brouillon</Button>}
+    </header>
+    <p className="text-sm text-gray-600">Les encaissements ne sont pas encore disponibles sur cet écran.</p>
+    {error && <div role="alert" className="border border-red-300 rounded p-3 text-red-700">{error}</div>}
+    <div className="grid gap-3 sm:grid-cols-3">
+      {[['Total émis', 'totalAmount'], ['Encaissé', 'amountPaid'], ['Reste dû', 'amountDue']].map(([label, field]) =>
+        <div key={field} className="border rounded p-4 bg-white"><p>{label} — page courante</p>
+          <strong className="text-xl">{amount(issued.reduce((total, i) => total + Number(i[field as 'totalAmount' | 'amountPaid' | 'amountDue']), 0))}</strong>
+        </div>)}
+    </div>
+    <p className="text-sm text-gray-600">Totaux hors brouillons et factures annulées. Recherche et filtres sur les 100 factures de la page.</p>
+    <div className="flex flex-wrap items-end gap-3">
+      <label className="flex-1 min-w-48">Numéro ou identifiant du client
+        <input className="block w-full border rounded p-2 focus:ring-2 focus:ring-blue-500" value={search} onChange={e => setSearch(e.target.value)} />
+      </label>
+      <label>Statut
+        <select className="block border rounded p-2" value={status} onChange={e => setStatus(e.target.value)}>
+          <option value="ALL">Tous les statuts</option>
+          {Object.entries(labels).map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+        </select>
+      </label>
+      <Button variant="outline" disabled={loading || busy} onClick={() => load(offset)}>Actualiser</Button>
+    </div>
+    {loading && <p role="status">Chargement des factures…</p>}
+    <div className="overflow-x-auto border rounded bg-white" aria-busy={loading || busy}>
+      <table className="w-full text-left text-sm">
+        <thead className="bg-gray-100"><tr>{['Facture', 'Client (identifiant)', 'Statut', 'Échéance', 'Total', 'Payé', 'Reste dû', 'Actions'].map(h => <th className="p-3" key={h} scope="col">{h}</th>)}</tr></thead>
+        <tbody>{visible.map(invoice => <tr className="border-t" key={invoice.id}>
+          <td className="p-3"><code>{invoice.invoiceNumber}</code></td><td className="p-3">{invoice.customerId}</td>
+          <td className="p-3">{labels[invoice.status] || invoice.status}</td>
+          <td className="p-3">{new Date(invoice.dueDate).toLocaleDateString('fr-FR')}</td>
+          <td className="p-3">{amount(invoice.totalAmount)}</td><td className="p-3">{amount(invoice.amountPaid)}</td><td className="p-3">{amount(invoice.amountDue)}</td>
+          <td className="p-3"><div className="flex gap-2">
+            <Button variant="outline" disabled={busy || loading} onClick={() => { setSelected(invoice); setModalOpen(true); }}>{canUpdate && invoice.status === 'DRAFT' ? 'Modifier' : 'Consulter'}</Button>
+            {canManage && invoice.status === 'DRAFT' && <Button disabled={busy || loading} onClick={() => transition(invoice, 'issue')}>Émettre</Button>}
+            {canManage && !['PAID', 'CANCELLED'].includes(invoice.status) && <Button variant="danger" disabled={busy || loading} onClick={() => transition(invoice, 'cancel')}>Annuler</Button>}
+          </div></td>
+        </tr>)}</tbody>
+      </table>
+      {!loading && !visible.length && <p className="p-6">{error ? 'Données indisponibles.' : 'Aucune facture trouvée sur cette page.'}</p>}
+    </div>
+    <nav aria-label="Pagination des factures" className="flex flex-wrap items-center gap-3">
+      <Button variant="outline" disabled={loading || busy || offset === 0} onClick={() => load(Math.max(0, offset - 100))}>Précédent</Button>
+      <span>Page {offset / 100 + 1}</span>
+      <Button variant="outline" disabled={loading || busy || !hasNext} onClick={() => load(offset + 100)}>Suivant</Button>
+    </nav>
+    <InvoiceModal isOpen={modalOpen} onClose={() => { if (!mutating.current) setModalOpen(false); }} initialData={selected}
+      readOnly={selected ? !canUpdate : !canCreate} onSave={save} />
+  </section>;
 }

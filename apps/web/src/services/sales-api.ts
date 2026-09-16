@@ -45,8 +45,8 @@ export class SalesApiClient {
   }
 
   // Invoices
-  public static async getInvoices(): Promise<ApiResponse<InvoiceDto[]>> {
-    return ApiClient.request<InvoiceDto[]>('/nexus/invoices');
+  public static async getInvoices(offset = 0): Promise<ApiResponse<InvoiceDto[]>> {
+    return ApiClient.request<InvoiceDto[]>(offset === 0 ? '/nexus/invoices' : `/nexus/invoices?offset=${offset}`);
   }
 
   public static async getInvoice(id: string): Promise<ApiResponse<InvoiceDto>> {
@@ -60,16 +60,24 @@ export class SalesApiClient {
     });
   }
 
-  public static async updateInvoice(id: string, dto: UpdateInvoiceDto): Promise<ApiResponse<InvoiceDto>> {
+  public static async updateInvoice(id: string, dto: UpdateInvoiceDto, idempotencyKey?: string): Promise<ApiResponse<InvoiceDto>> {
     return ApiClient.request<InvoiceDto>(`/nexus/invoices/${id}`, {
       method: 'PUT',
       body: dto,
+      ...(idempotencyKey ? { headers: { 'idempotency-key': idempotencyKey } } : {}),
     });
   }
 
-  public static async issueInvoice(id: string): Promise<ApiResponse<InvoiceDto>> {
+  public static async issueInvoice(id: string, idempotencyKey?: string): Promise<ApiResponse<InvoiceDto>> {
     return ApiClient.request<InvoiceDto>(`/nexus/invoices/${id}/issue`, {
       method: 'POST',
+      ...(idempotencyKey ? { headers: { 'idempotency-key': idempotencyKey } } : {}),
+    });
+  }
+
+  public static async cancelInvoice(id: string, reason: string, idempotencyKey: string): Promise<ApiResponse<InvoiceDto>> {
+    return ApiClient.request<InvoiceDto>(`/nexus/invoices/${id}/cancel`, {
+      method: 'POST', body: { reason }, headers: { 'idempotency-key': idempotencyKey },
     });
   }
 

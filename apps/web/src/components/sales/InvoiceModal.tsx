@@ -1,243 +1,111 @@
 'use client';
-
-import React, { useState, useEffect } from 'react';
-import { LocalInvoice, LocalCustomer, LocalProduct, LocalLineItem } from '../../offline/db';
-import { LineItemEditor } from './LineItemEditor';
-import { Modal } from '../ui/Modal';
+import React, { useEffect, useRef, useState } from 'react';
+import type { CreateInvoiceDto, InvoiceDto } from '@nexora/nexus';
+import styles from './invoices.module.css';
 import { Button } from '../ui/Button';
 
 interface InvoiceModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSave: (invoiceData: Partial<LocalInvoice>) => void;
-  initialData?: LocalInvoice | null;
-  customers: LocalCustomer[];
-  products: LocalProduct[];
+  onSave: (data: CreateInvoiceDto, key: string) => Promise<boolean>;
+  initialData?: InvoiceDto | null;
+  readOnly?: boolean;
 }
-
-export const InvoiceModal: React.FC<InvoiceModalProps> = ({
-  isOpen,
-  onClose,
-  onSave,
-  initialData,
-  customers,
-  products,
-}) => {
-  const [formData, setFormData] = useState<Partial<LocalInvoice>>({
-    customerId: '',
-    status: 'UNPAID',
-    dueDate: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().split('T')[0],
-    lineItems: [],
-  });
-
-  const [errors, setErrors] = useState<Record<string, string>>({});
-
+const blankLine = () => ({ productServiceId: '', description: '', quantity: 1, unitPrice: 0, taxRate: 0, discountPercent: 0 });
+const inputClass = 'w-full border border-gray-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500';
+export const InvoiceModal: React.FC<InvoiceModalProps> = ({ isOpen, onClose, onSave, initialData, readOnly = false }) => {
+  const [data, setData] = useState<CreateInvoiceDto>({ customerId: '', dueDate: '', lineItems: [blankLine()] });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const pending = useRef(false);
+  const dialog = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (initialData) {
-      setFormData({
-        customerId: initialData.customerId || customers[0]?.id || '',
-        status: initialData.status || 'UNPAID',
-        dueDate: initialData.dueDate ? initialData.dueDate.split('T')[0] : '',
-        lineItems: initialData.lineItems || [],
-      });
-    } else {
-      const defaultProduct = products[0];
-      const initialLine: LocalLineItem = defaultProduct
-        ? {
-            id: `line-${crypto.randomUUID()}`,
-            productServiceId: defaultProduct.id,
-            description: defaultProduct.name,
-            quantity: 1,
-            unitPrice: defaultProduct.salePrice,
-            taxRate: defaultProduct.taxRate ?? 20,
-            discountPercent: 0,
-            totalPrice: defaultProduct.salePrice,
-          }
-        : {
-            id: `line-${crypto.randomUUID()}`,
-            productServiceId: undefined,
-            description: 'Nouvelle prestation',
-            quantity: 1,
-            unitPrice: 0,
-            taxRate: 20,
-            discountPercent: 0,
-            totalPrice: 0,
-          };
-
-      setFormData({
-        customerId: customers[0]?.id || '',
-        status: 'UNPAID',
-        dueDate: new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString().split('T')[0],
-        lineItems: [initialLine],
-      });
+    if (!isOpen) return;
+    const previous = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const focusable = () => Array.from(dialog.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]') ?? []).filter(el => !el.closest('fieldset:disabled'));
+    dialog.current?.focus();
+    const keydown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !pending.current) onClose();
+      if (event.key !== 'Tab') return;
+      const items = focusable();
+      if (!items.length) { event.preventDefault(); return; }
+      const first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog.current)) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && (document.activeElement === last || document.activeElement === dialog.current)) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener('keydown', keydown);
+    return () => { document.removeEventListener('keydown', keydown); document.body.style.overflow = previousOverflow; previous?.focus(); };
+  }, [isOpen, onClose]);
+  const attempt = useRef<{ payload: string; key: string } | null>(null);
+  const locked = readOnly || (!!initialData && initialData.status !== 'DRAFT');
+  useEffect(() => {
+    if (!isOpen) return;
+    setData(initialData ? {
+      customerId: initialData.customerId, dueDate: initialData.dueDate.slice(0, 10),
+      lineItems: initialData.lineItems.map(({ productServiceId, description, quantity, unitPrice, taxRate, discountPercent }) =>
+        ({ productServiceId, description, quantity, unitPrice, taxRate, discountPercent })),
+    } : { customerId: '', dueDate: new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10), lineItems: [blankLine()] });
+    attempt.current = null; setError('');
+  }, [isOpen, initialData]);
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (pending.current || locked) return;
+    if (!data.customerId.trim() || !data.dueDate || !Number.isFinite(Date.parse(data.dueDate))) {
+      setError('Renseignez le client et une date valide.'); return;
     }
-    setErrors({});
-  }, [initialData, isOpen, customers, products]);
-
-  const isIssuedAndLocked = !!initialData && initialData.status !== 'DRAFT';
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const newErrors: Record<string, string> = {};
-
-    if (!formData.customerId) {
-      newErrors.customerId = 'Veuillez sélectionner un client.';
+    if (!data.lineItems.length || data.lineItems.length > 200 || data.lineItems.some(l =>
+      !l.productServiceId?.trim() || !l.description.trim() ||
+      !Number.isFinite(l.quantity) || l.quantity <= 0 || l.quantity > 1e9 ||
+      !Number.isFinite(l.unitPrice) || l.unitPrice < 0 || l.unitPrice > 1e9 ||
+      !Number.isFinite(l.taxRate ?? 0) || (l.taxRate ?? 0) < 0 || (l.taxRate ?? 0) > 100 ||
+      !Number.isFinite(l.discountPercent ?? 0) || (l.discountPercent ?? 0) < 0 || (l.discountPercent ?? 0) > 100)) {
+      setError('Vérifiez les articles, descriptions, quantités, prix et taux (0 à 100 %).'); return;
     }
-
-    if (!formData.lineItems || formData.lineItems.length === 0) {
-      newErrors.lineItems = "La facture doit comporter au moins une ligne d'article.";
-    }
-
-    if (Object.keys(newErrors).length > 0) {
-      setErrors(newErrors);
-      return;
-    }
-
-    onSave(formData);
+    const payload = JSON.stringify(data);
+    if (attempt.current?.payload !== payload) attempt.current = { payload, key: crypto.randomUUID() };
+    pending.current = true; setBusy(true); setError('');
+    try {
+      if (!await onSave(data, attempt.current!.key)) setError('Enregistrement non confirmé. Vérifiez le message et réessayez.');
+    } catch { setError('Enregistrement non confirmé. Réessayez avec les mêmes données.'); }
+    finally { pending.current = false; setBusy(false); }
   };
-
-  return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={
-        <div>
-          <div>{initialData ? `Facture : ${initialData.invoiceNumber}` : 'Nouvelle Facture de Vente'}</div>
-          {isIssuedAndLocked && (
-            <span style={{ fontSize: 12, color: '#0284c7', fontWeight: 600 }}>
-              🔒 Facture émise (Contenu commercial immuable)
-            </span>
-          )}
-        </div>
-      }
-      size="xl"
-      footer={
-        <>
-          <Button variant="outline" onClick={onClose}>
-            Fermer
-          </Button>
-          <Button variant="primary" onClick={handleSubmit}>
-            {initialData ? 'Enregistrer les modifications' : 'Émettre la Facture'}
-          </Button>
-        </>
-      }
-    >
-      <form onSubmit={handleSubmit}>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 12, marginBottom: 16 }}>
-          <div>
-            <label
-              htmlFor="invoice-customer-select"
-              style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}
-            >
-              Client Destinataire *
-            </label>
-            <select
-              id="invoice-customer-select"
-              disabled={isIssuedAndLocked}
-              value={formData.customerId}
-              onChange={(e) => {
-                setFormData((prev) => ({ ...prev, customerId: e.target.value }));
-                if (errors.customerId) setErrors((prev) => ({ ...prev, customerId: '' }));
-              }}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                borderRadius: 6,
-                border: `1px solid ${errors.customerId ? '#ef4444' : '#cbd5e1'}`,
-                fontSize: 14,
-                backgroundColor: isIssuedAndLocked ? '#f1f5f9' : '#ffffff',
-                boxSizing: 'border-box',
-              }}
-            >
-              <option value="">-- Sélectionner un client --</option>
-              {customers.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.code} - {c.name} {c.companyName ? `(${c.companyName})` : ''}
-                </option>
-              ))}
-            </select>
-            {errors.customerId && (
-              <span style={{ fontSize: 11, color: '#ef4444', marginTop: 2, display: 'block' }}>
-                {errors.customerId}
-              </span>
-            )}
-          </div>
-
-          <div>
-            <label
-              htmlFor="invoice-status-select"
-              style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}
-            >
-              Statut de la Facture
-            </label>
-            <select
-              id="invoice-status-select"
-              value={formData.status}
-              onChange={(e) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  status: e.target.value as any,
-                }))
-              }
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                borderRadius: 6,
-                border: '1px solid #cbd5e1',
-                fontSize: 14,
-                backgroundColor: '#ffffff',
-                boxSizing: 'border-box',
-              }}
-            >
-              <option value="DRAFT">Brouillon (DRAFT)</option>
-              <option value="UNPAID">Non Payée (UNPAID)</option>
-              <option value="PARTIAL">Partiellement Payée (PARTIAL)</option>
-              <option value="PAID">Payée (PAID)</option>
-              <option value="CANCELLED">Annulée (CANCELLED)</option>
-            </select>
-          </div>
-
-          <div>
-            <label
-              htmlFor="invoice-due-date"
-              style={{ display: 'block', fontSize: 12, fontWeight: 600, color: '#475569', marginBottom: 4 }}
-            >
-              Date d'Échéance de Règlement
-            </label>
-            <input
-              id="invoice-due-date"
-              type="date"
-              value={formData.dueDate}
-              onChange={(e) => setFormData((prev) => ({ ...prev, dueDate: e.target.value }))}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                borderRadius: 6,
-                border: '1px solid #cbd5e1',
-                fontSize: 14,
-                boxSizing: 'border-box',
-              }}
-            />
-          </div>
-        </div>
-
-        {/* Line Item Editor */}
-        <LineItemEditor
-          lines={formData.lineItems || []}
-          onChange={(updatedLines) => {
-            if (isIssuedAndLocked) return;
-            setFormData((prev) => ({ ...prev, lineItems: updatedLines }));
-            if (errors.lineItems) setErrors((prev) => ({ ...prev, lineItems: '' }));
-          }}
-          products={products}
-          readOnly={isIssuedAndLocked}
-        />
-        {errors.lineItems && (
-          <span style={{ fontSize: 12, color: '#ef4444', marginBottom: 12, display: 'block' }}>
-            {errors.lineItems}
-          </span>
-        )}
-      </form>
-    </Modal>
-  );
+  const close = () => { if (!pending.current) onClose(); };
+  if (!isOpen) return null;
+  return <div className={styles.overlay}><div ref={dialog} className={styles.dialog} role="dialog" aria-modal="true" aria-labelledby="invoice-title" tabIndex={-1}>
+    <h2 id="invoice-title">{initialData ? 'Facture ' + initialData.invoiceNumber : 'Nouveau brouillon'}</h2>
+    <form onSubmit={submit}>
+      {locked && <p className="mb-4 text-sm">Consultation uniquement.</p>}
+      {!locked && <p className="mb-4 text-sm text-gray-600">Saisissez les identifiants du client et des articles enregistrés pour votre organisation. Les listes de sélection ne sont pas encore connectées.</p>}
+      {error && <p role="alert" className="mb-4 text-red-700">{error}</p>}
+      <fieldset disabled={busy || locked} className="space-y-4">
+        <label className="block">Identifiant du client
+          <input className={inputClass} maxLength={100} required value={data.customerId} onChange={e => setData({ ...data, customerId: e.target.value })} />
+        </label>
+        <label className="block">Échéance
+          <input className={inputClass} type="date" required value={data.dueDate} onChange={e => setData({ ...data, dueDate: e.target.value })} />
+        </label>
+        {data.lineItems.map((line, index) => <fieldset key={index} className="border rounded p-3 space-y-2">
+          <legend className="font-semibold">Ligne {index + 1}</legend>
+          {(['productServiceId', 'description', 'quantity', 'unitPrice', 'taxRate', 'discountPercent'] as const).map(field => {
+            const labels = { productServiceId: 'Identifiant de l’article', description: 'Description', quantity: 'Quantité', unitPrice: 'Prix unitaire', taxRate: 'Taxe (%)', discountPercent: 'Remise (%)' };
+            const numeric = field !== 'productServiceId' && field !== 'description';
+            return <label key={field} className="block text-sm">{labels[field]}
+              <input className={inputClass} type={numeric ? 'number' : 'text'} required step={numeric ? 'any' : undefined}
+                min={numeric ? 0 : undefined} max={numeric ? (field === 'taxRate' || field === 'discountPercent' ? 100 : 1e9) : undefined}
+                maxLength={field === 'productServiceId' ? 100 : field === 'description' ? 2000 : undefined}
+                value={line[field] ?? ''} onChange={e => setData({ ...data, lineItems: data.lineItems.map((l, i) => i === index ? { ...l, [field]: numeric ? Number(e.target.value) : e.target.value } : l) })} />
+            </label>;
+          })}
+          {!locked && <Button variant="outline" disabled={busy} onClick={() => setData({ ...data, lineItems: data.lineItems.filter((_, i) => i !== index) })}>Retirer la ligne</Button>}
+        </fieldset>)}
+        {!locked && <Button variant="outline" disabled={busy || data.lineItems.length >= 200} onClick={() => setData({ ...data, lineItems: [...data.lineItems, blankLine()] })}>Ajouter une ligne</Button>}
+      </fieldset>
+      <div className="flex flex-wrap justify-end gap-2 mt-4">
+        <Button variant="outline" disabled={busy} onClick={close}>Fermer</Button>
+        {!locked && <Button type="submit" isLoading={busy}>Enregistrer le brouillon</Button>}
+      </div>
+    </form>
+  </div></div>;
 };
